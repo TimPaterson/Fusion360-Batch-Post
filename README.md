@@ -8,11 +8,11 @@ the order of operations.
 The add-in creates a new command in the Manufacture workspace next to
 the native Post Process command called Post Process All:
 
-![Post Process All](https://github.com/TimPaterson/Fusion360-Batch-Post/resources/Command/32x32.png)
+![Post Process All](https://github.com/TimPaterson/Fusion360-Batch-Post/master/resources/Command/32x32.png)
 
 Clicking this command will bring up the following dialog:
 
-![Dialog Image](https://github.com/TimPaterson/Fusion360-Batch-Post/ReadMeImages/DialogImage.PNG)
+![Dialog Image](https://github.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/DialogImage.PNG)
 
 The first time you run this command, the Output Folder and Post Processor
 fields will be blank. You must set both of these fields before you can
@@ -27,7 +27,7 @@ Here is an example of a design with three components. The name of the
 component appears first, then a hyphen and the name of the setup for
 that component:
 
-![Setup Image](https://github.com/TimPaterson/Fusion360-Batch-Post/ReadMeImages/SetupImage.PNG)
+![Setup Image](https://github.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/SetupImage.PNG)
 
 When you run the Post Process All command, it will create three
 subfolders in the output folder, named "Cover", "Block", and "Insulator".
