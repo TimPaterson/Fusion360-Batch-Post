@@ -1,11 +1,11 @@
 #Author-Tim Paterson
 #Description-Post process all CAM setups, using the setup name as the output file name.
 
-import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path
+import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, time
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 1
+version = 2
 
 # Initial default values of settings
 defaultSettings = {
@@ -15,7 +15,8 @@ defaultSettings = {
     "output" : "",
     "sequence" : True,
     "twoDigits" : False,
-    "delFiles" : True
+    "delFiles" : False,
+    "delFolder" : False
 }
 
 # Constants
@@ -28,14 +29,15 @@ constCAMProductId = "CAMProductType"
 constAttrGroup = constCmdDefId
 constAttrName = "settings"
 constSettingsFileExt = ".settings"
+constGcodeFileExt = ".nc"
 
 # Tool tip text
 toolTip = (
     "Post process all setups into G-code for your machine.\n\n"
     "The name of the setup is used for the name of the output "
-    "file adding the .nc extension. A hyphen ('-') in the name indicates "
+    "file adding the .nc extension. A colon (':') in the name indicates "
     "the preceding portion is the name of a subfolder. Multiple "
-    "hyphens can be used to nest subfolders. Spaces around hyphens "
+    "colons can be used to nest subfolders. Spaces around colons "
     "are removed.\n\n"
     "Setups within a folder are optionally preceded by a "
     "sequence number. This identifies the order in which the "
@@ -88,6 +90,9 @@ class SettingsManager:
             try:
                 file = open(self.GetPath())
                 self.default = json.load(file)
+                # never allow delFiles or delFolder to default to True
+                self.default["delFiles"] = False;
+                self.default["delFolder"] = False;
                 if self.default["version"] != version:
                     self.UpdateSettings(defaultSettings, self.default)
             except Exception:
@@ -106,6 +111,9 @@ class SettingsManager:
     def SaveDefault(self, docSettings):
         self.fMustSave = False
         self.default = dict(docSettings)
+        # never allow delFiles or delFolder to default to True
+        self.default["delFiles"] = False;
+        self.default["delFolder"] = False;
         try:
             strSettings = json.dumps(docSettings)
             file = open(self.GetPath(), "w")
@@ -163,6 +171,22 @@ def InitAddIn():
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
 
+def CountOutputFolderFiles(folder, limit):
+    cntFiles = 0
+    cntNcFiles = 0
+    for path, dirs, files in os.walk(folder):
+        for file in files:
+            if file.endswith(constGcodeFileExt):
+                cntNcFiles += 1
+            else:
+                cntFiles += 1
+        if cntFiles > limit:
+            return "many files that are not G-code"
+        if cntNcFiles > limit * 1.5:
+            return "many more G-code files than are produced by this design";
+    return None
+
+
 # Event handler for the commandCreated event.
 class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
     def __init__(self):
@@ -187,7 +211,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             input.tooltip = "Output Folder"
             input.tooltipDescription = (
                 "Full path name of the output folder. Any subfolders, as denoted "
-                "by hyphens in the setup name, will be relative this folder.")
+                "by colons in the setup name, will be relative this folder.")
 
             input = inputGroupPost.children.addBoolValueInput("browseOutput", "Browse", False)
             input.resourceFolder = "resources/Browse"
@@ -195,20 +219,43 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
 
             # check box to delete existing files
             input = inputs.addBoolValueInput("delFiles", 
-                                             "Delete output folder first", 
+                                             "Delete existing files in each folder", 
                                              True, 
                                              "", 
                                              docSettings["delFiles"])
-            input.tooltip = "Delete Output Folder"
+            input.tooltip = "Delete Existing Files"
             input.tooltipDescription = (
-                "Delete the output folder before post processing. This will "
-                "prevent accumulation of output files which are no longer used."
+                "Delete all files in each output folder before post processing. "
+                "This will help prevent accumulation of G-code files which are "
+                "no longer used."
                 "<p>For example, you could decide to add sequence numbers after "
                 "already post processing without them. If this option is not "
                 "checked, you will have two of each file, a newer one with a "
                 "sequence number and older one without. With this option checked, "
                 "all previous files will be deleted so only current results will "
-                "be present.</p>")
+                "be present.</p>"
+                "<p>This option will only delete the files in folders in which new "
+                "G-code files are being written. If you change the name of a "
+                "folder, for example, it will not be deleted.</p>")
+
+            # check box to delete entire output folder
+            input = inputs.addBoolValueInput("delFolder", 
+                                             "Delete entire output folder first", 
+                                             True, 
+                                             "", 
+                                             docSettings["delFolder"] and docSettings["delFiles"])
+            input.isEnabled = docSettings["delFiles"] # enable only if delete existing files
+            input.tooltip = "Delete Output Folder"
+            input.tooltipDescription = (
+                "Delete the entire output folder before post processing. This "
+                "deletes all files and subfolders regardless of whether or not "
+                "new G-code files are written to a particular folder."
+                "<p><b>WARNING!</b> Be absolutely sure the output folder is set "
+                "correctly before selecting this option. Run the command once "
+                "before setting this option and verify the results are in the "
+                "correct folder. An incorrect setting of the output folder with "
+                "this option selected could result in unintentionally wiping out "
+                "a vast number of files.</p>")
 
             # check box to prepend sequence numbers
             input = inputs.addBoolValueInput("sequence", 
@@ -249,7 +296,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 inputGroupPost.isExpanded = False
 
             # button to save default settings
-            input = inputs.addBoolValueInput("save", "Save these settings as default", False)
+            input = inputs.addBoolValueInput("save", "Save these settings as system default", False)
             input.resourceFolder = "resources/Save"
             input.tooltip = "Save Default Settings"
             input.tooltipDescription = (
@@ -327,6 +374,13 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
             # Enable twoDigits only if sequence is true
             if input.id == "sequence":
                 inputs.itemById("twoDigits").isEnabled = input.value
+
+            # Enable delFolder only if delFiles is true
+            if input.id == "delFiles":
+                item = inputs.itemById("delFolder")
+                item.value = input.value and item.value
+                item.isEnabled = input.value
+
         except:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
@@ -402,6 +456,7 @@ def stop(context):
 
 def PerformPostProcess(docSettings):
     ui = None
+    progress = None
     try:
         app = adsk.core.Application.get()
         ui  = app.userInterface
@@ -411,71 +466,151 @@ def PerformPostProcess(docSettings):
         settingsMgr.SaveSettings(doc.attributes, docSettings)
 
         cntFiles = 0
-        cntSetups = 0
+        cntSkipped = 0
+        lstSkipped = ""
         product = doc.products.itemByProductType(constCAMProductId)
 
         if product != None:
             cam = adsk.cam.CAM.cast(product)
             setups = cam.setups
-            if (setups != 0 and cam.allOperations.count != 0):
-                cam.generateAllToolpaths(True)
-                seqDict = dict()
+            progress = ui.createProgressDialog()
+            progress.isCancelButtonShown = True
+            progress.show("Generating toolpaths...", "Beginning toolpath generation", 0, 1)
+            progress.progressValue = 1; # try to get it to display
+            progress.progressValue = 0;
 
+            if setups.count != 0 and cam.allOperations.count != 0:
+                # make sure we're not going to delete too much
                 outputFolder = docSettings["output"]
-                if docSettings["delFiles"]:
-                    shutil.rmtree(outputFolder, True)
+                if docSettings["delFolder"]:
+                    strMsg = CountOutputFolderFiles(outputFolder, setups.count)
+                    if strMsg:
+                        docSettings["delFolder"] = False
+                        strMsg = (
+                            "The output folder contains {}. "
+                            "It will not be deleted. You may wish to make sure you selected "
+                            "the correct folder. If you want the folder deleted, you must "
+                            "do it manually."
+                            ).format(strMsg)
+                        res = ui.messageBox(strMsg, 
+                                            constCmdName,
+                                            adsk.core.MessageBoxButtonTypes.OKCancelButtonType,
+                                            adsk.core.MessageBoxIconTypes.WarningIconType)
+                        if res == adsk.core.DialogResults.DialogCancel:
+                            return  # abort!
 
-                progress = ui.createProgressDialog()
-                progress.isCancelButtonShown = True
+                # generate toolpaths with progess dialog
+                genStat = cam.generateAllToolpaths(True)
+                if not genStat.isGenerationCompleted:
+                    progress.maximumValue = genStat.numberOfOperations;
+                    progress.message = "Generating toolpath %v of %m";
+                    while not genStat.isGenerationCompleted:
+                        if progress.wasCancelled:
+                            return  #abort!
+                        progress.progressValue = genStat.numberOfCompleted
+                        time.sleep(.1)
+
+                if False and not cam.checkAllToolpaths():   # checkAllToolpaths() always throws exception
+                    res = ui.messageBox("Some toolpaths are not valid. If you continue, affected Setups will be skipped", 
+                                        constCmdName,
+                                        adsk.core.MessageBoxButtonTypes.OKCancelButtonType,
+                                        adsk.core.MessageBoxIconTypes.WarningIconType)
+                    if res == adsk.core.DialogResults.DialogCancel:
+                        return  # abort!
+                
+                if docSettings["delFolder"]:
+                    try:
+                        shutil.rmtree(outputFolder, True)
+                    except:
+                        pass #ignore errors
+
                 progressMsg = "{} files written to " + outputFolder
-                cntSetups = 0
                 progress.show("Post Processing...", "", 0, setups.count)
+
+                cntSetups = 0
+                seqDict = dict()
 
                 for setup in setups:
                     if progress.wasCancelled:
                         break
                     if not setup.isSuppressed and setup.allOperations.count != 0:
-                        nameList = setup.name.split('-')    # folder separator
-                        setupFolder = outputFolder
-                        cnt = len(nameList) - 1
-                        i = 0
-                        while i < cnt:
-                            setupFolder += "/" + nameList[i].strip()
-                            i += 1
-                    
-                        # keep a separate sequence number for each folder
-                        if setupFolder in seqDict:
-                            seqDict[setupFolder] += 1
+                        if not cam.checkToolpath(setup):
+                            cntSkipped += 1
+                            lstSkipped += "\n"+ setup.name
                         else:
-                            seqDict[setupFolder] = 1
+                            nameList = setup.name.split(':')    # folder separator
+                            setupFolder = outputFolder
+                            cnt = len(nameList) - 1
+                            i = 0
+                            while i < cnt:
+                                setupFolder += "/" + nameList[i].strip()
+                                i += 1
+                        
+                            # keep a separate sequence number for each folder
+                            if setupFolder in seqDict:
+                                seqDict[setupFolder] += 1
+                            else:
+                                seqDict[setupFolder] = 1
+                                # first file for this folder
+                                if (docSettings["delFiles"]):
+                                    # delete all the files in the folder
+                                    try:
+                                        for entry in os.scandir(setupFolder):
+                                            if entry.is_file():
+                                                try:
+                                                    os.remove(entry.path)
+                                                except:
+                                                    pass #ignore errors
+                                    except:
+                                        pass #ignore errors
 
-                        # prepend sequence number if enabled
-                        fname = nameList[i].strip()
-                        if docSettings["sequence"]:
-                            seq = seqDict[setupFolder]
-                            seqStr = str(seq)
-                            if docSettings["twoDigits"] and seq < 10:
-                                seqStr = "0" + seqStr
-                            fname = seqStr + ' ' + fname
+                            # prepend sequence number if enabled
+                            fname = nameList[i].strip()
+                            if docSettings["sequence"]:
+                                seq = seqDict[setupFolder]
+                                seqStr = str(seq)
+                                if docSettings["twoDigits"] and seq < 10:
+                                    seqStr = "0" + seqStr
+                                fname = seqStr + ' ' + fname
 
-                        # post the file
-                        postInput = adsk.cam.PostProcessInput.create(fname, 
-                                                                    docSettings["post"], 
-                                                                    setupFolder, 
-                                                                    docSettings["units"])
-                        postInput.isOpenInEditor = False
-                        cam.postProcess(setup, postInput)
-                        cntFiles += 1
+                            # post the file
+                            postInput = adsk.cam.PostProcessInput.create(fname, 
+                                                                        docSettings["post"], 
+                                                                        setupFolder, 
+                                                                        docSettings["units"])
+                            postInput.isOpenInEditor = False
+                            try:
+                                if not cam.postProcess(setup, postInput):
+                                    cntSkipped += 1
+                                    lstSkipped += "\Failed: "+ setup.name
+                                else:
+                                    cntFiles += 1
+                                time.sleep(.05) # files missing on big projects unless we slow down (??)
+                            except:
+                                cntSkipped += 1
+                                lstSkipped += "\nException: "+ setup.name
+                        
                     cntSetups += 1
                     progress.message = progressMsg.format(cntFiles)
                     progress.progressValue = cntSetups
 
-                progress.hide()
+            progress.hide()
 
         # done with setups, report results
-        if cntFiles == 0:
-            ui.messageBox('No CAM operations to post')
+        if cntSkipped != 0:
+            ui.messageBox("{} files were written. {} Setups were skipped due to invalid toolpath:{}".format(cntFiles, cntSkipped, lstSkipped), 
+                constCmdName, 
+                adsk.core.MessageBoxButtonTypes.OKButtonType,
+                adsk.core.MessageBoxIconTypes.WarningIconType)
+            
+        elif cntFiles == 0:
+            ui.messageBox('No CAM operations posted', 
+                constCmdName, 
+                adsk.core.MessageBoxButtonTypes.OKButtonType,
+                adsk.core.MessageBoxIconTypes.WarningIconType)
 
     except:
+        if progress:
+            progress.hide()
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
