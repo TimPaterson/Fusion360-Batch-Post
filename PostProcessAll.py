@@ -30,6 +30,7 @@ constAttrGroup = constCmdDefId
 constAttrName = "settings"
 constSettingsFileExt = ".settings"
 constGcodeFileExt = ".nc"
+constPostLoopDelay = 0.1
 
 # Tool tip text
 toolTip = (
@@ -582,10 +583,10 @@ def PerformPostProcess(docSettings):
                             try:
                                 if not cam.postProcess(setup, postInput):
                                     cntSkipped += 1
-                                    lstSkipped += "\Failed: "+ setup.name
+                                    lstSkipped += "\nFailed: "+ setup.name
                                 else:
                                     cntFiles += 1
-                                time.sleep(.05) # files missing on big projects unless we slow down (??)
+                                time.sleep(constPostLoopDelay) # files missing sometimes unless we slow down (??)
                             except:
                                 cntSkipped += 1
                                 lstSkipped += "\nException: "+ setup.name
