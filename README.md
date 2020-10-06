@@ -1,10 +1,14 @@
 # Fusion 360 CAM Batch Post Process Add-In
+#### NEW! Fixes tool change restriction in Fusion 360 for Personal Use
+See section below.
+
+### Introduction
 This add-in for Fusion 360 will post-process all CAM setups at once.
 Each setup is put in a file with the name of the setup. You can
 optionally use a special setup naming convention to put files in
 subfolders. You can also put sequence numbers on the name to maintain
 the order of operations.
-### Introduction
+
 The add-in creates a new command in the Manufacture workspace next to
 the native Post Process command called Post Process All:
 
@@ -42,6 +46,23 @@ each folder.
 In the above example, when adding sequence numbers the files in
 the "Block" folder would have the names "1 first edge" and "2 second
 edge".
+### Fusion 360 for Personal Use
+The free version of Fusion 360 now has some limitations on G-code
+output: It will not support tool changes, and it slows down all
+moves to feed rate. This add-in can work around the tool change
+limitation and makes a first step in restoring rapid moves.
+
+In the Personal Use section of the add-in dialog, you will find
+the option to break each setup into individual operations. This 
+is required if you have the free version of Fusion 360 and there
+is a tool change in any setup. The add-in will combine the G-code
+for each operation of a setup back into a single file for that
+setup, hiding this limitation.
+
+In addition, you can also select the option to change the first
+Z moves in each operation to rapid (G0) moves. Currently this
+affects only the first one or two moves, and should be reviewed
+before use. Hopefully this can be extended to more eligible moves.
 ### Installation
 To install, start by putting the PostProcessAll.* files along with
 the "resources" subfolder into a folder on your machine. This can
@@ -65,3 +86,12 @@ To see the new command, go to the Manufacture workspace and select the
 Milling or Turning tab. The command appears on the toolbar next to
 the native Post Process command. It also appears in the Actions
 drop-down menu.
+### Issues
+If the command fails, run it again. There seem to be occasional timing 
+issues that usually resolve themselves.
+
+The concatenation and modification of G-code has been only been lightly
+tested and with just one post processor (Tormach). Given that there are
+very specific assumptions about what the G-code input will look like,
+it would not be surprising to find problems come up. Feel free to report
+them on the Issues page, and include the G-code files.

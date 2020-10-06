@@ -649,7 +649,7 @@ def PerformPostProcess(docSettings):
 
         # done with setups, report results
         if cntSkipped != 0:
-            ui.messageBox("{} files were written. {} Setups were skipped due to invalid toolpath:{}".format(cntFiles, cntSkipped, lstSkipped), 
+            ui.messageBox("{} files were written. {} Setups were skipped due to error:{}".format(cntFiles, cntSkipped, lstSkipped), 
                 constCmdName, 
                 adsk.core.MessageBoxButtonTypes.OKButtonType,
                 adsk.core.MessageBoxIconTypes.WarningIconType)
@@ -739,19 +739,21 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 opList.add(op)
                 i += 1
 
-            retries = 4
+            retries = 5
+            delay = constPostLoopDelay
             while True:
                 try:
                     if not cam.postProcess(opList, postInput):
                         return PostError.Fail
                 except:
                     return PostError.Except
- 
-                time.sleep(constPostLoopDelay) # wait for it to finish (??)
+
+                time.sleep(delay) # wait for it to finish (??)
                 try:
                     fileOp = open(path + constOpTmpFile + constGcodeFileExt)
                     break
                 except:
+                    delay *= 2
                     retries -= 1
                     if retries == 0:
                         raise
