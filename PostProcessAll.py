@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 2
+version = 3
 
 # Initial default values of settings
 defaultSettings = {
@@ -16,7 +16,9 @@ defaultSettings = {
     "sequence" : True,
     "twoDigits" : False,
     "delFiles" : False,
-    "delFolder" : False
+    "delFolder" : False,
+    "splitSetup" : False,
+    "fastZ" : False
 }
 
 # Constants
@@ -31,6 +33,20 @@ constAttrName = "settings"
 constSettingsFileExt = ".settings"
 constGcodeFileExt = ".nc"
 constPostLoopDelay = 0.1
+constBodyTmpFile = "$body"
+constOpTmpFile = "$op"
+constToolChangeGcode = "G30\n"
+constEndProgramGcode = "G30\nM30\n%\n"
+constRapidZgcode = "G00 Z"
+constFeedZgcode = "G01 Z"
+
+# Errors in post processing
+from enum import Enum
+class PostError(Enum):
+    Success = 0
+    Fail = 1
+    Except = 2
+    BadFormat = 3
 
 # Tool tip text
 toolTip = (
@@ -282,6 +298,39 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "Sequence numbers 0 - 9 will have a leading zero added, becoming"
                 '"01" to "09". This could be useful for formatting or sorting.')
 
+            # "Personal Use" version
+            inputGroupPost = inputs.addGroupCommandInput("groupPersonal", "Personal Use")
+            input = inputGroupPost.children.addBoolValueInput("splitSetup",
+                                                              "Use individual operations",
+                                                              True,
+                                                              "",
+                                                              docSettings["splitSetup"])
+            input.tooltip = "Split Setup Into Individual Operations"
+            input.tooltipDescription = (
+                "Generate output for each operation individually. This is usually "
+                "REQUIRED when using Fusion 360 for Personal Use, because tool "
+                "changes are not allowed. The individual operations will be "
+                "grouped back together into the same file, eliminating this "
+                "limitation. You will get an error if there is a tool change "
+                "in a setup and this options is not selected.")
+
+            input = inputGroupPost.children.addBoolValueInput("fastZ",
+                                                              "Make rapid Z moves",
+                                                              True,
+                                                              "",
+                                                              docSettings["fastZ"])
+            input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
+            input.tooltip = "Make Initial Z Moves Rapid"
+            input.tooltipDescription = (
+                "Replace the initial Z moves at feed rate with rapid (G0) moves. "
+                "In Fusion 360 for Personal Use, moves that could be rapid are "
+                "now limited to the current feed rate. When this optionis selected, "
+                "the G-code will be analyzed to find the initial Z moves and "
+                "replace them with rapid moves."
+                "<p><b>WARNING!<b> This option should be used with caution. "
+                "Review the G-code to verify it is correct. Comments have been "
+                "added to indicate the changes.")
+
             # post processor
             inputGroupPost = inputs.addGroupCommandInput("groupPost", "Post Processor")
             input = inputGroupPost.children.addStringValueInput("post", "", docSettings["post"])
@@ -381,6 +430,10 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                 item = inputs.itemById("delFolder")
                 item.value = input.value and item.value
                 item.isEnabled = input.value
+
+            # Enable fastZ only if splitSetup is true
+            if input.id == "splitSetup":
+                inputs.itemById("fastZ").isEnabled = input.value
 
         except:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
@@ -537,7 +590,7 @@ def PerformPostProcess(docSettings):
                     if not setup.isSuppressed and setup.allOperations.count != 0:
                         if not cam.checkToolpath(setup):
                             cntSkipped += 1
-                            lstSkipped += "\n"+ setup.name
+                            lstSkipped += "\n" + setup.name
                         else:
                             nameList = setup.name.split(':')    # folder separator
                             setupFolder = outputFolder
@@ -575,22 +628,19 @@ def PerformPostProcess(docSettings):
                                 fname = seqStr + ' ' + fname
 
                             # post the file
-                            postInput = adsk.cam.PostProcessInput.create(fname, 
-                                                                        docSettings["post"], 
-                                                                        setupFolder, 
-                                                                        docSettings["units"])
-                            postInput.isOpenInEditor = False
-                            try:
-                                if not cam.postProcess(setup, postInput):
-                                    cntSkipped += 1
-                                    lstSkipped += "\nFailed: "+ setup.name
-                                else:
-                                    cntFiles += 1
-                                time.sleep(constPostLoopDelay) # files missing sometimes unless we slow down (??)
-                            except:
+                            status = PostProcessSetup(fname, setup, setupFolder, docSettings)
+                            if status == PostError.Success:
+                                cntFiles += 1
+                            else:
                                 cntSkipped += 1
-                                lstSkipped += "\nException: "+ setup.name
-                        
+                                if status == PostError.Fail:
+                                    lstSkipped += "\nFailed: "
+                                elif status == PostError.BadFormat:
+                                    lstSkipped += "\nGcode file format not recognized: "
+                                else:
+                                    lstSkipped += "\nException: "
+                                lstSkipped += setup.name
+                         
                     cntSetups += 1
                     progress.message = progressMsg.format(cntFiles)
                     progress.progressValue = cntSetups
@@ -615,3 +665,256 @@ def PerformPostProcess(docSettings):
             progress.hide()
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+
+class FileFormatError(Exception):
+    pass
+
+def PostProcessSetup(fname, setup, setupFolder, docSettings):
+    ui = None
+    fileHead = None
+    fileBody = None
+    fileOp = None
+    retVal = PostError.Except
+
+    try:
+        app = adsk.core.Application.get()
+        ui  = app.userInterface
+        doc = app.activeDocument
+        product = doc.products.itemByProductType(constCAMProductId)
+        cam = adsk.cam.CAM.cast(product)
+
+        # Create PostProcessInput
+        opName = fname
+        if docSettings["splitSetup"]:
+            opName += constOpTmpFile
+        postInput = adsk.cam.PostProcessInput.create(opName, 
+                                                    docSettings["post"], 
+                                                    setupFolder, 
+                                                    docSettings["units"])
+        postInput.isOpenInEditor = False
+
+        # Do it all at once?
+        if not docSettings["splitSetup"]:
+            try:
+                if not cam.postProcess(setup, postInput):
+                    return PostError.Fail
+                time.sleep(constPostLoopDelay) # files missing sometimes unless we slow down (??)
+                return PostError.Success
+            except:
+                return PostError.Except
+
+        # Split setup into individual operations
+        path = setupFolder + "/" + fname
+        fileHead = open(path + constGcodeFileExt, "w")
+        fileBody = open(path + constBodyTmpFile + constGcodeFileExt, "w")
+        fFirst = True
+        lineNum = 10
+        toolLast = -1
+        fFastZenabled = docSettings["fastZ"]
+
+        i = 0;
+        ops = setup.allOperations;
+        while i < ops.count:
+            op = ops[i]
+            i += 1
+            if op.isSuppressed:
+                continue
+
+            # Look ahead for operations without a toolpath. This can happen
+            # with a manual operation. Group it with current operation.
+            # Or if first, group it with subsequent ones.
+            hasTool = op.hasToolpath
+            opList = adsk.core.ObjectCollection.create()
+            opList.add(op)
+            while i < ops.count:
+                op = ops[i]
+                if op.isSuppressed:
+                    i += 1
+                    continue
+                if op.hasToolpath:
+                    if not hasTool:
+                        opList.add(op)
+                        i += 1
+                    break;
+                opList.add(op)
+                i += 1
+
+            retries = 4
+            while True:
+                try:
+                    if not cam.postProcess(opList, postInput):
+                        return PostError.Fail
+                except:
+                    return PostError.Except
+ 
+                time.sleep(constPostLoopDelay) # wait for it to finish (??)
+                try:
+                    fileOp = open(path + constOpTmpFile + constGcodeFileExt)
+                    break
+                except:
+                    retries -= 1
+                    if retries == 0:
+                        raise
+                    pass
+            
+            # Parse the gcode. we want to move each tool comment to the top.
+            # We expect this format:
+            # %
+            # (<file name>)
+            # (<tool>)
+            # <several lines of initialization or comments
+            # Nxx(<op name>)
+            # Txx ...
+            # ...
+            # Nxx(<op name>) <if pattern>
+            # ...
+            # G30
+            # M30
+            # %
+
+            # % at start only
+            line = fileOp.readline()
+            if line[0] != "%":
+                raise FileFormatError
+            if fFirst:
+                fileHead.write(line)
+
+            # filaname comment at start only
+            line = fileOp.readline()
+            if line[0] != "(":
+                raise FileFormatError
+            if fFirst:
+                fileHead.write("(" + fname + ")\n")
+
+            # Now get the tool comment
+            line = fileOp.readline()
+            fileHead.write(line)
+            if line[0:2] != "(T":
+                raise FileFormatError
+
+            # We're done with the head, move on to the body
+            # Skip to the first line number: "N"
+            fHavNum = False
+            line2 = ""
+            line1 = ""
+            fFastZ = fFastZenabled
+
+            while True:
+                line = fileOp.readline()
+                if len(line) == 0:
+                    raise FileFormatError;  #unexpected EOF
+
+                # Have a line number?
+                if line[0] == "N":
+                    pos = line.find("(")
+                    line = "N" + str(lineNum) + (line[pos:] if pos != -1 else "\n")
+                    lineNum += 10
+                    fHavNum = True
+                    fFastZ = fFastZenabled
+
+                # Have a tool change?
+                elif line[0] == "T":
+                    pos = line.find(" ")
+                    if pos == -1:
+                        raise FileFormatError
+                    try:
+                        toolCur = int(line[1:pos])
+                    except:
+                        raise FileFormatError
+                    # Is this a tool change?
+                    if toolCur != toolLast and toolLast != -1:
+                        fileBody.write(constToolChangeGcode)
+                    toolLast = toolCur
+
+                # End of program marker?
+                elif line[0] == "%":
+                    break
+
+                elif fFastZ:
+                    # Looking in previous line for a Z move
+                    f = line1[:4] == "G1 Z"
+                    if (f or line1[:5] == "G01 Z"):
+                        fFastZ = False
+                        posZ = 4 if f else 5
+                        try:
+                            pos = line1.index(" ", posZ + 1)
+                            posZ = float(line1[posZ:pos])
+                            pos = line1.index("F", pos + 1)
+                            feed = float(line1[pos + 1:-1])
+                            # Change to rapid move
+                            line1 = constRapidZgcode + str(posZ) + ' (Changed from: "' + line1[:-1] + '")\n'
+
+                            # Check next line
+                            f = line[:4] == "G1 Z"
+                            if (f or line[:5] == "G01 Z"):
+                                posZ = 4 if f else 5
+                                pos = line.find(" ", posZ + 1)  # not found pos = -1
+                                posZ = float(line[posZ:pos])    # so end of line except \n
+                                # Feed optional
+                                pos = line.find("F", pos + 1)
+                                if pos != -1:
+                                    feed = float(line[pos + 1:-1])
+                                # Change to rapid move
+                                line = constRapidZgcode + str(posZ) + ' (Changed from: "' + line[:-1] + '")\n'
+                                if (feed != 0):
+                                    line += constFeedZgcode + str(posZ) + " F" + str(feed) + " (Added to set feed rate)\n"
+                        except:
+                            pass # Just skip changes
+
+
+                # copy line to output
+                if fFirst or fHavNum:
+                    fileBody.write(line2)
+                    line2 = line1
+                    line1 = line
+
+            fFirst = False
+            fileOp.close()
+            os.remove(fileOp.name)
+            fileOp = None
+
+        # Completed all operations
+        # Copy body to head
+        fileBody.close()
+        fileBody = open(fileBody.name)  # open for reading
+        fileHead.write(fileBody.read())
+        fileBody.close()
+        os.remove(fileBody.name)
+        fileBody = None
+
+        # Append the ending line
+        fileHead.write(constEndProgramGcode)
+        fileHead.close()
+        fileHead = None
+
+        return PostError.Success
+
+    except FileFormatError:
+        retVal = PostError.BadFormat
+        # Fall into all other errors
+    except:
+        if fileHead:
+            try:
+                fileHead.close()
+                os.remove(fileHead.name)
+            except:
+                pass
+
+        if fileBody:
+            try:
+                fileBody.close()
+                os.remove(fileBody.name)
+            except:
+                pass
+
+        if fileOp:
+            try:
+                fileOp.close()
+                os.remove(fileOp.name)
+            except:
+                pass
+
+        if ui and retVal != PostError.BadFormat:
+            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+
+        return retVal
