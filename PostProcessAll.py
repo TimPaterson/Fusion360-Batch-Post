@@ -1,7 +1,7 @@
 #Author-Tim Paterson
 #Description-Post process all CAM setups, using the setup name as the output file name.
 
-import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, time
+import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, time, re, pathlib, enum
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
@@ -37,12 +37,11 @@ constBodyTmpFile = "$body"
 constOpTmpFile = "$op"
 constToolChangeGcode = "G30\n"
 constEndProgramGcode = "G30\nM30\n%\n"
-constRapidZgcode = "G00 Z"
-constFeedZgcode = "G01 Z"
+constRapidZgcode = 'G00 Z{} (Changed from: "{}")\n'
+constFeedZgcode = "G01 Z{} F{} (Added to set feed rate)\n"
 
 # Errors in post processing
-from enum import Enum
-class PostError(Enum):
+class PostError(enum.Enum):
     Success = 0
     Fail = 1
     Except = 2
@@ -705,12 +704,20 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
         # Split setup into individual operations
         path = setupFolder + "/" + fname
+        pathlib.Path(path).mkdir(parents=True, exist_ok=True)
         fileHead = open(path + constGcodeFileExt, "w")
         fileBody = open(path + constBodyTmpFile + constGcodeFileExt, "w")
         fFirst = True
         lineNum = 10
         toolLast = -1
         fFastZenabled = docSettings["fastZ"]
+        if fFastZenabled:
+            strReg = (r"(G(?P<G>[0-9]+)[^XYZF]*)?"
+                "(X(?P<X>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                "(Y(?P<Y>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                "(Z(?P<Z>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                "(F(?P<F>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?")
+            regGcode = re.compile(strReg)
 
         i = 0;
         ops = setup.allOperations;
@@ -799,23 +806,28 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             fHavNum = False
             line2 = ""
             line1 = ""
+            # Initialize rapid move optimizations
             fFastZ = fFastZenabled
+            Zcur = None
+            Zfeed = None
+            feedCur = 0
 
             while True:
                 line = fileOp.readline()
                 if len(line) == 0:
                     raise FileFormatError;  #unexpected EOF
 
+                ch = line[0]
+
                 # Have a line number?
-                if line[0] == "N":
+                if ch == "N":
                     pos = line.find("(")
                     line = "N" + str(lineNum) + (line[pos:] if pos != -1 else "\n")
                     lineNum += 10
                     fHavNum = True
-                    fFastZ = fFastZenabled
 
                 # Have a tool change?
-                elif line[0] == "T":
+                elif ch == "T":
                     pos = line.find(" ")
                     if pos == -1:
                         raise FileFormatError
@@ -829,40 +841,60 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                     toolLast = toolCur
 
                 # End of program marker?
-                elif line[0] == "%":
+                elif ch == "%":
                     break
 
                 elif fFastZ:
                     # Looking in previous line for a Z move
-                    f = line1[:4] == "G1 Z"
-                    if (f or line1[:5] == "G01 Z"):
-                        fFastZ = False
-                        posZ = 4 if f else 5
+                    match = regGcode.match(line1)
+                    if match.end() != 0:
                         try:
-                            pos = line1.index(" ", posZ + 1)
-                            posZ = float(line1[posZ:pos])
-                            pos = line1.index("F", pos + 1)
-                            feed = float(line1[pos + 1:-1])
-                            # Change to rapid move
-                            line1 = constRapidZgcode + str(posZ) + ' (Changed from: "' + line1[:-1] + '")\n'
+                            match = match.groupdict()
+                            Gcode = match["G"]
+                            if Gcode != None:
+                                Gcode = int(Gcode)
 
-                            # Check next line
-                            f = line[:4] == "G1 Z"
-                            if (f or line[:5] == "G01 Z"):
-                                posZ = 4 if f else 5
-                                pos = line.find(" ", posZ + 1)  # not found pos = -1
-                                posZ = float(line[posZ:pos])    # so end of line except \n
-                                # Feed optional
-                                pos = line.find("F", pos + 1)
-                                if pos != -1:
-                                    feed = float(line[pos + 1:-1])
-                                # Change to rapid move
-                                line = constRapidZgcode + str(posZ) + ' (Changed from: "' + line[:-1] + '")\n'
-                                if (feed != 0):
-                                    line += constFeedZgcode + str(posZ) + " F" + str(feed) + " (Added to set feed rate)\n"
+                            Ztmp = match["Z"]
+                            if Ztmp != None:
+                                Zcur = float(Ztmp)
+
+                            feedTmp = match["F"]
+                            if feedTmp != None:
+                                feedCur = float(feedTmp)
+
+                            if Gcode == 1:
+                                if Ztmp != None and match["X"] == None and match["Y"] == None:
+                                    # Z move only
+                                    if Zfeed == None:
+                                        # Have first Z-only move, make it rapid
+                                        Zfeed = Zcur
+                                        # Replace line with rapid move
+                                        line1 = constRapidZgcode.format(Zcur, line1[:-1])
+
+                                        # First move was retract height, check for second move to feed height
+                                        match = regGcode.match(line)
+                                        if match.end() != 0:
+                                            match = match.groupdict()
+                                            Ztmp = match["Z"]                                                
+                                            if Ztmp != None and match["X"] == None and match["Y"] == None:
+                                                # Assume this is feed height. This is wrong if threading/boring
+                                                # from the bottom of a hole
+                                                Zfeed = float(Ztmp)
+                                                if Gcode == 1:
+                                                    # Change to rapid move
+                                                    line = constRapidZgcode.format(Zfeed, line[:-1])
+                                                    feedTmp = match["F"]
+                                                    if feedTmp != None:
+                                                        feedTmp = float(feedTmp)
+                                                    else:
+                                                        feedTmp = feedCur
+                                                    if (feedTmp != 0):
+                                                        line += constFeedZgcode.format(Zfeed, feedTmp)
+                                    elif feedCur == 0:
+                                        # Anomalous feed rate, replace with rapid move
+                                        line1 = constRapidZgcode.format(Zcur, line1[:-1])
                         except:
-                            pass # Just skip changes
-
+                            fFastZ = False # Just skip changes
 
                 # copy line to output
                 if fFirst or fHavNum:
