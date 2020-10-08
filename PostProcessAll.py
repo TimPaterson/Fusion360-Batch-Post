@@ -715,7 +715,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
         # Split setup into individual operations
         path = setupFolder + "/" + fname
-        pathlib.Path(path).mkdir(parents=True, exist_ok=True)
+        pathlib.Path(setupFolder).mkdir(parents=True, exist_ok=True)
         fileHead = open(path + constGcodeFileExt, "w")
         fileBody = open(path + constBodyTmpFile + constGcodeFileExt, "w")
         fFirst = True
