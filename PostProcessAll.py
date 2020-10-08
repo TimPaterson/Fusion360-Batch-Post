@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 3
+version = 4
 
 # Initial default values of settings
 defaultSettings = {
@@ -18,7 +18,11 @@ defaultSettings = {
     "delFiles" : False,
     "delFolder" : False,
     "splitSetup" : False,
-    "fastZ" : False
+    "fastZ" : False,
+    # Groups are expanded or not
+    "groupOutput" : True,
+    "groupPersonal" : True,
+    "groupPost" : True
 }
 
 # Constants
@@ -87,6 +91,7 @@ class SettingsManager:
         self.default = None
         self.path = None
         self.fMustSave = False
+        self.inputs = None
 
     def GetSettings(self, docAttr):
         docSettings = None
@@ -221,17 +226,18 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             inputs = cmd.commandInputs
 
             # output folder
-            inputGroupPost = inputs.addGroupCommandInput("groupOutput", "Output Folder")
-            input = inputGroupPost.children.addStringValueInput("output", "", docSettings["output"])
+            inputGroup = inputs.addGroupCommandInput("groupOutput", "Output Folder")
+            input = inputGroup.children.addStringValueInput("output", "", docSettings["output"])
             input.isFullWidth = True
             input.tooltip = "Output Folder"
             input.tooltipDescription = (
                 "Full path name of the output folder. Any subfolders, as denoted "
                 "by colons in the setup name, will be relative this folder.")
 
-            input = inputGroupPost.children.addBoolValueInput("browseOutput", "Browse", False)
+            input = inputGroup.children.addBoolValueInput("browseOutput", "Browse", False)
             input.resourceFolder = "resources/Browse"
             input.tooltip = "Browse for Output Folder"
+            inputGroup.isExpanded = docSettings["groupOutput"]
 
             # check box to delete existing files
             input = inputs.addBoolValueInput("delFiles", 
@@ -298,8 +304,8 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 '"01" to "09". This could be useful for formatting or sorting.')
 
             # "Personal Use" version
-            inputGroupPost = inputs.addGroupCommandInput("groupPersonal", "Personal Use")
-            input = inputGroupPost.children.addBoolValueInput("splitSetup",
+            inputGroup = inputs.addGroupCommandInput("groupPersonal", "Personal Use")
+            input = inputGroup.children.addBoolValueInput("splitSetup",
                                                               "Use individual operations",
                                                               True,
                                                               "",
@@ -313,7 +319,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "limitation. You will get an error if there is a tool change "
                 "in a setup and this options is not selected.")
 
-            input = inputGroupPost.children.addBoolValueInput("fastZ",
+            input = inputGroup.children.addBoolValueInput("fastZ",
                                                               "Make rapid Z moves",
                                                               True,
                                                               "",
@@ -329,20 +335,20 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "<p><b>WARNING!<b> This option should be used with caution. "
                 "Review the G-code to verify it is correct. Comments have been "
                 "added to indicate the changes.")
+            inputGroup.isExpanded = docSettings["groupPersonal"]
 
             # post processor
-            inputGroupPost = inputs.addGroupCommandInput("groupPost", "Post Processor")
-            input = inputGroupPost.children.addStringValueInput("post", "", docSettings["post"])
+            inputGroup = inputs.addGroupCommandInput("groupPost", "Post Processor")
+            input = inputGroup.children.addStringValueInput("post", "", docSettings["post"])
             input.isFullWidth = True
             input.tooltip = "Post Processor"
             input.tooltipDescription = (
                 "Full path name of the post processor (.cps file).")
             
-            input = inputGroupPost.children.addBoolValueInput("browsePost", "Browse", False)
+            input = inputGroup.children.addBoolValueInput("browsePost", "Browse", False)
             input.resourceFolder = "resources/Browse"
             input.tooltip = "Browse for Post Processor"
-            if (len(docSettings["post"]) != 0):
-                inputGroupPost.isExpanded = False
+            inputGroup.isExpanded = docSettings["groupPost"]
 
             # button to save default settings
             input = inputs.addBoolValueInput("save", "Save these settings as system default", False)
@@ -418,7 +424,10 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                     inputs.itemById("output").value = dialog.folder
 
             elif input.id in self.docSettings:
-                self.docSettings[input.id] = input.value
+                if input.objectType == adsk.core.GroupCommandInput.classType():
+                    self.docSettings[input.id] = input.isExpanded
+                else:
+                    self.docSettings[input.id] = input.value
 
             # Enable twoDigits only if sequence is true
             if input.id == "sequence":
@@ -461,6 +470,8 @@ class CommandValidateInputsHandler(adsk.core.ValidateInputsEventHandler):
                 err1 = err2 = combine = ""
                 if not fIsOutputValid:
                     err1 = "the output folder"
+                    # ensure it's not collapsed
+                    inputs.itemById("groupOutput").isExpanded = True
                 if not fIsPostValid:
                     err2 = "a valid post processor"
                     # ensure it's not collapsed
