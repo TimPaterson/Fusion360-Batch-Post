@@ -304,13 +304,32 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "Sequence numbers 0 - 9 will have a leading zero added, becoming"
                 '"01" to "09". This could be useful for formatting or sorting.')
 
+            # select units
+            input = inputs.addDropDownCommandInput("units", 
+                                                   "Post output units",
+                                                   adsk.core.DropDownStyles.TextListDropDownStyle)
+            # Document Unit = 0
+            # Inches = 1
+            # Millimeters = 2
+            # We'll use these convenient values so the item index will be the value
+            input.listItems.add('Document units', True)
+            input.listItems.add('Inches', False)
+            input.listItems.add('Milimeters', False)
+            input.listItems.item(docSettings["units"]).isSelected = True;
+            input.isFullWidth = True
+            input.tooltip = "Post Output Units"
+            input.tooltipDescription = (
+                "Select the units to be used in the output - inches or millimeters. "
+                "This may be chosen explicitly, or the units used in the design "
+                "can be used.")
+
             # "Personal Use" version
             inputGroup = inputs.addGroupCommandInput("groupPersonal", "Personal Use")
             input = inputGroup.children.addBoolValueInput("splitSetup",
-                                                              "Use individual operations",
-                                                              True,
-                                                              "",
-                                                              docSettings["splitSetup"])
+                                                          "Use individual operations",
+                                                          True,
+                                                          "",
+                                                          docSettings["splitSetup"])
             input.tooltip = "Split Setup Into Individual Operations"
             input.tooltipDescription = (
                 "Generate output for each operation individually. This is usually "
@@ -321,18 +340,18 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "in a setup and this options is not selected.")
 
             input = inputGroup.children.addBoolValueInput("fastZ",
-                                                              "Make rapid Z moves",
-                                                              True,
-                                                              "",
-                                                              docSettings["fastZ"])
+                                                          "Restore rapid moves",
+                                                          True,
+                                                          "",
+                                                          docSettings["fastZ"])
             input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
-            input.tooltip = "Make Initial Z Moves Rapid"
+            input.tooltip = "Restore Rapid Moves"
             input.tooltipDescription = (
-                "Replace the initial Z moves at feed rate with rapid (G0) moves. "
+                "Replace appropriate moves at feed rate with rapid (G0) moves. "
                 "In Fusion 360 for Personal Use, moves that could be rapid are "
-                "now limited to the current feed rate. When this optionis selected, "
-                "the G-code will be analyzed to find the initial Z moves and "
-                "replace them with rapid moves."
+                "now limited to the current feed rate. When this option is selected, "
+                "the G-code will be analyzed to find moves at or above the feed "
+                "height and replace them with rapid moves."
                 "<p><b>WARNING!<b> This option should be used with caution. "
                 "Review the G-code to verify it is correct. Comments have been "
                 "added to indicate the changes.")
@@ -423,6 +442,9 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                 if dialog.showDialog() == adsk.core.DialogResults.DialogOK:
                     self.docSettings["output"] = dialog.folder
                     inputs.itemById("output").value = dialog.folder
+
+            elif input.id == "units":
+                self.docSettings[input.id] = input.selectedItem.index
 
             elif input.id in self.docSettings:
                 if input.objectType == adsk.core.GroupCommandInput.classType():
