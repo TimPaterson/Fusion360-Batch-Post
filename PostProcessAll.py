@@ -42,7 +42,8 @@ constOpTmpFile = "$op"
 constToolChangeGcode = "G30\n"
 constEndProgramGcode = "G30\nM30\n%\n"
 constRapidZgcode = 'G00 Z{} (Changed from: "{}")\n'
-constFeedZgcode = "G01 Z{} F{} (Added to set feed rate)\n"
+constRapidXYgcode = 'G00 {} (Changed from: "{}")\n'
+constAddFeedGcode = " F{} (Feed rate added)\n"
 
 # Errors in post processing
 class PostError(enum.Enum):
@@ -724,8 +725,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         fFastZenabled = docSettings["fastZ"]
         if fFastZenabled:
             strReg = (r"(G(?P<G>[0-9]+)[^XYZF]*)?"
-                "(X(?P<X>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
-                "(Y(?P<Y>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                "(?P<XY>((X-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                "((Y-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?)"
                 "(Z(?P<Z>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
                 "(F(?P<F>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?")
             regGcode = re.compile(strReg)
@@ -814,7 +815,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
             # We're done with the head, move on to the body
             # Skip to the first line number: "N"
-            fHavNum = False
+            fHavBody = False
             line2 = ""
             line1 = ""
             # Initialize rapid move optimizations
@@ -822,6 +823,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             Zcur = None
             Zfeed = None
             feedCur = 0
+            fFirstG1 = False
 
             while True:
                 line = fileOp.readline()
@@ -835,7 +837,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                     pos = line.find("(")
                     line = "N" + str(lineNum) + (line[pos:] if pos != -1 else "\n")
                     lineNum += 10
-                    fHavNum = True
+                    fHavBody = True
 
                 # Have a tool change?
                 elif ch == "T":
@@ -850,6 +852,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                     if toolCur != toolLast and toolLast != -1:
                         fileBody.write(constToolChangeGcode)
                     toolLast = toolCur
+                    fHavBody = True
 
                 # End of program marker?
                 elif ch == "%":
@@ -867,6 +870,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
                             Ztmp = match["Z"]
                             if Ztmp != None:
+                                Zlast = Zcur
                                 Zcur = float(Ztmp)
 
                             feedTmp = match["F"]
@@ -874,41 +878,56 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                                 feedCur = float(feedTmp)
 
                             if Gcode == 1:
-                                if Ztmp != None and match["X"] == None and match["Y"] == None:
-                                    # Z move only
-                                    if Zfeed == None:
-                                        # Have first Z-only move, make it rapid
-                                        Zfeed = Zcur
-                                        # Replace line with rapid move
-                                        line1 = constRapidZgcode.format(Zcur, line1[:-1])
+                                if Ztmp != None:
+                                    if len(match["XY"]) == 0:
+                                        # Z move only
+                                        if Zfeed == None:
+                                            # Have first Z-only move, make it rapid
+                                            Zfeed = Zcur
+                                            # Replace line with rapid move
+                                            line1 = constRapidZgcode.format(Zcur, line1[:-1])
+                                            fFirstG1 = True
+                                            Gcode = 0
 
-                                        # First move was retract height, check for second move to feed height
-                                        match = regGcode.match(line)
-                                        if match.end() != 0:
-                                            match = match.groupdict()
-                                            Ztmp = match["Z"]                                                
-                                            if Ztmp != None and match["X"] == None and match["Y"] == None:
-                                                # Assume this is feed height. This is wrong if threading/boring
-                                                # from the bottom of a hole
-                                                Zfeed = float(Ztmp)
-                                                if Gcode == 1:
-                                                    # Change to rapid move
-                                                    line = constRapidZgcode.format(Zfeed, line[:-1])
-                                                    feedTmp = match["F"]
-                                                    if feedTmp != None:
-                                                        feedTmp = float(feedTmp)
-                                                    else:
-                                                        feedTmp = feedCur
-                                                    if (feedTmp != 0):
-                                                        line += constFeedZgcode.format(Zfeed, feedTmp)
-                                    elif feedCur == 0:
-                                        # Anomalous feed rate, replace with rapid move
-                                        line1 = constRapidZgcode.format(Zcur, line1[:-1])
+                                            # First move was retract height, check for second move to feed height
+                                            match = regGcode.match(line)
+                                            if match.end() != 0:
+                                                match = match.groupdict()
+                                                Ztmp = match["Z"]                                                
+                                                if Ztmp != None and len(match["XY"]) == 0:
+                                                    # Assume this is feed height. This is wrong if threading/boring
+                                                    # from the bottom of a hole
+                                                    Zfeed = float(Ztmp)
+
+                                        elif Zcur >= Zlast or Zcur >= Zfeed or feedCur == 0:
+                                            # Upward move, above feed height, or anomalous feed rate.
+                                            # Replace with rapid move
+                                            line1 = constRapidZgcode.format(Zcur, line1[:-1])
+                                            fFirstG1 = True
+                                            Gcode = 0
+
+                                elif Zcur >= Zfeed:
+                                    # No Z move, at/above feed height
+                                    line1 = constRapidXYgcode.format(match["XY"].rstrip("\n "), line1[:-1])
+                                    fFirstG1 = True
+                                    Gcode = 0
+
+                            if (Gcode == 1 and fFirstG1):
+                                if (feedTmp == None):
+                                    # Feed rate not present, add it
+                                    line1 = line1[:-1] + constAddFeedGcode.format(feedCur)
+                                fFirstG1 = False
+
+                            if Zcur != None and Zfeed != None and Zcur > Zfeed and Gcode != None and \
+                                Gcode != 0 and len(match["XY"]) != 0 and (Ztmp != None or Gcode != 1):
+                                # We're above the feed height, but made a cutting move.
+                                # Feed height is wrong, bring it up
+                                Zfeed = Zcur + 0.001
                         except:
                             fFastZ = False # Just skip changes
 
                 # copy line to output
-                if fFirst or fHavNum:
+                if fFirst or fHavBody:
                     fileBody.write(line2)
                     line2 = line1
                     line1 = line
