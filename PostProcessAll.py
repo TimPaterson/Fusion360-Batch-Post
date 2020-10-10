@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 4
+version = 5
 
 # Initial default values of settings
 defaultSettings = {
@@ -19,6 +19,7 @@ defaultSettings = {
     "delFolder" : False,
     "splitSetup" : False,
     "fastZ" : False,
+    "toolChange" : "M9 G30",
     # Groups are expanded or not
     "groupOutput" : True,
     "groupPersonal" : True,
@@ -39,11 +40,14 @@ constGcodeFileExt = ".nc"
 constPostLoopDelay = 0.1
 constBodyTmpFile = "$body"
 constOpTmpFile = "$op"
-constToolChangeGcode = "G30\n"
-constEndProgramGcode = "G30\nM30\n%\n"
 constRapidZgcode = 'G00 Z{} (Changed from: "{}")\n'
 constRapidXYgcode = 'G00 {} (Changed from: "{}")\n'
+constFeedZgcode = 'G01 Z{} F{} (Changed from: "{}")\n'
+constFeedXYgcode = 'G01 {} F{} (Changed from: "{}")\n'
+constFeedXYZgcode = 'G01 {} Z{} F{} (Changed from: "{}")\n'
 constAddFeedGcode = " F{} (Feed rate added)\n"
+constMotionGcodeSet = {0,1,2,3,33,38,73,76,80,81,82,84,85,86,87,88,89}
+constEndMcodeSet = {5,9,30}
 
 # Errors in post processing
 class PostError(enum.Enum):
@@ -324,6 +328,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "can be used.")
 
             # "Personal Use" version
+            # check box to split up setup into individual operations
             inputGroup = inputs.addGroupCommandInput("groupPersonal", "Personal Use")
             input = inputGroup.children.addBoolValueInput("splitSetup",
                                                           "Use individual operations",
@@ -339,8 +344,33 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "limitation. You will get an error if there is a tool change "
                 "in a setup and this options is not selected.")
 
+            # text box as a label for tool change command
+            input = inputGroup.children.addTextBoxCommandInput("toolLabel", 
+                                                               "", 
+                                                               "G-code to precede tool change:",
+                                                               1,
+                                                               True)
+            input.isFullWidth = True
+            label = input
+
+            # enter G-code for tool change
+            input = inputGroup.children.addStringValueInput("toolChange", "", docSettings["toolChange"])
+            input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
+            input.isFullWidth = True
+            input.tooltip = "G-code for Tool Change"
+            input.tooltipDescription = (
+                "Allows inserting a line of code before tool changes. For example, "
+                "you might want M5 (spindle stop), M9 (coolant stop), and/or G28 or G30 "
+                "(return to home). The code will be placed on the line before the "
+                "tool change. You can get mulitple lines by separating them with "
+                "a colon (:)."
+            )
+            label.tooltip = input.tooltip
+            label.tooltipDescription = input.tooltipDescription
+           
+            # check box to enable restoring rapid moves
             input = inputGroup.children.addBoolValueInput("fastZ",
-                                                          "Restore rapid moves",
+                                                          "Restore rapid moves (experimental)",
                                                           True,
                                                           "",
                                                           docSettings["fastZ"])
@@ -462,8 +492,10 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                 item.value = input.value and item.value
                 item.isEnabled = input.value
 
-            # Enable fastZ only if splitSetup is true
+            # Options for splitSetup
             if input.id == "splitSetup":
+                inputs.itemById("toolChange").isEnabled = input.value
+                inputs.itemById("toolLabel").isEnabled = input.value
                 inputs.itemById("fastZ").isEnabled = input.value
 
         except:
@@ -744,14 +776,18 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         fFirst = True
         lineNum = 10
         toolLast = -1
+        toolChange = docSettings["toolChange"]
+        if len(toolChange) != 0:
+            toolChange = toolChange.replace(":", "\n")
+            toolChange += "\n"
+        regToolComment = re.compile(r"\(T[0-9]+\s")
         fFastZenabled = docSettings["fastZ"]
         if fFastZenabled:
-            strReg = (r"(G(?P<G>[0-9]+)[^XYZF]*)?"
+            regGcode = re.compile(r"(G(?P<G>[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
                 "(?P<XY>((X-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
                 "((Y-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?)"
                 "(Z(?P<Z>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
                 "(F(?P<F>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?")
-            regGcode = re.compile(strReg)
 
         i = 0;
         ops = setup.allOperations;
@@ -800,57 +836,84 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                         raise
                     pass
             
-            # Parse the gcode. we want to move each tool comment to the top.
-            # We expect this format:
-            # %
-            # (<file name>)
-            # (<tool>)
-            # <several lines of initialization or comments
-            # Nxx(<op name>)
-            # Txx ...
-            # ...
-            # Nxx(<op name>) <if pattern>
-            # ...
-            # G30
-            # M30
-            # %
+            # Parse the gcode. We expect a header like this:
+            #
+            # % <optional>
+            # (<comments>) <0 or more lines>
+            # (<Txx tool comment>) <optional>
+            # (<comments>) <0 or more lines>
+            # Gxx ... <1 or more lines of G-code initialization>
+            #
+            # This header is stripped from all files after the first,
+            # except the tool comment is put in a list at the top.
+            # The header ends when we find the body, which starts with:
+            #
+            # Nxx ... <or> Txx ...
+            #
+            # We copy all the body, looking for the tail. The start
+            # of the tail is marked by one of these:
+            # M30 - end program
+            # M5 - stop spindle
+            # M9 - stop coolant
+            # The tail is stripped until the last operation is done.
 
             # % at start only
             line = fileOp.readline()
-            if line[0] != "%":
-                raise FileFormatError
-            if fFirst:
-                fileHead.write(line)
+            if line[0] == "%":
+                if fFirst:
+                    fileHead.write(line)
+                line = fileOp.readline()
 
-            # filaname comment at start only
-            line = fileOp.readline()
-            if line[0] != "(":
-                raise FileFormatError
-            if fFirst:
-                fileHead.write("(" + fname + ")\n")
+            # check for initial comments and tool
+            # send it to header
+            while line[0] == "(" or line[0] == "\n":
+                if regToolComment.match(line) != None:
+                    fileHead.write(line)
+                    line = fileOp.readline()
+                    break;
 
-            # Now get the tool comment
-            line = fileOp.readline()
-            fileHead.write(line)
-            if line[0:2] != "(T":
-                raise FileFormatError
+                if fFirst:
+                    if line[1:].startswith(fname):
+                        line = "(" + fname + ")\n"    # correct file name
+                    fileHead.write(line)
+                line = fileOp.readline()
+
+            # continue check for comments, but send to body if first operation
+            while line[0] == "(" or line[0] == "\n":
+                if fFirst:
+                    fileBody.write(line)
+                line = fileOp.readline()
+            
+            # Body starts at next T or N
+            # Grab preceding comment if present
+            linePrev = " "
+            while True:
+                ch = line[0]
+                if ch == "T" or ch == "N":
+                    if not fFirst:
+                        fileBody.write("\n")
+                        if linePrev[0] == "(":
+                            fileBody.write(linePrev)
+                    break;
+                if (fFirst):
+                    fileBody.write(line)
+                linePrev = line
+                line = fileOp.readline()
 
             # We're done with the head, move on to the body
-            # Skip to the first line number: "N"
-            fHavBody = False
-            line2 = ""
-            line1 = ""
             # Initialize rapid move optimizations
             fFastZ = fFastZenabled
+            Gcode = None
             Zcur = None
             Zfeed = None
             feedCur = 0
             fFirstG1 = False
 
             while True:
-                line = fileOp.readline()
+                lineNext = fileOp.readline()    # Look ahead one line
+
                 if len(line) == 0:
-                    raise FileFormatError;  #unexpected EOF
+                    break
 
                 ch = line[0]
 
@@ -859,36 +922,42 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                     pos = line.find("(")
                     line = "N" + str(lineNum) + (line[pos:] if pos != -1 else "\n")
                     lineNum += 10
-                    fHavBody = True
 
                 # Have a tool change?
                 elif ch == "T":
                     pos = line.find(" ")
-                    if pos == -1:
-                        raise FileFormatError
                     try:
                         toolCur = int(line[1:pos])
                     except:
                         raise FileFormatError
                     # Is this a tool change?
                     if toolCur != toolLast and toolLast != -1:
-                        fileBody.write(constToolChangeGcode)
+                        fileBody.write(toolChange)
                     toolLast = toolCur
-                    fHavBody = True
 
                 # End of program marker?
-                elif ch == "%":
-                    break
+                elif ch == "M":
+                    pos = line.find(" ")
+                    try:
+                        Mcur = int(float(line[1:pos]))
+                    except:
+                        raise FileFormatError
+                    if Mcur in constEndMcodeSet:
+                        break
 
                 elif fFastZ:
-                    # Looking in previous line for a Z move
-                    match = regGcode.match(line1)
-                    if match.end() != 0:
+                    # Analyze code for chances to make rapid moves
+                    match = regGcode.match(line)
+                    if match.lastindex != 0:
                         try:
                             match = match.groupdict()
-                            Gcode = match["G"]
-                            if Gcode != None:
-                                Gcode = int(Gcode)
+                            GcodeTmp = match["G"]
+                            if GcodeTmp != None:
+                                GcodeTmp = int(float(GcodeTmp))
+                                if GcodeTmp in constMotionGcodeSet:
+                                    Gcode = GcodeTmp
+                                    if Gcode != 1:
+                                        fFirstG1 = False
 
                             Ztmp = match["Z"]
                             if Ztmp != None:
@@ -899,49 +968,70 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                             if feedTmp != None:
                                 feedCur = float(feedTmp)
 
+                            XYcur = match["XY"].rstrip("\n ")
+
+                            if Zfeed == None and (Gcode == 0 or Gcode == 1) and Ztmp != None and len(XYcur) == 0:
+                                # Figure out Z feed
+                                Zfeed = Zcur
+                                if Gcode != 0:
+                                    # Replace line with rapid move
+                                    line = constRapidZgcode.format(Zcur, line[:-1])
+                                    fFirstG1 = True
+                                    Gcode = 0
+
+                                # First move was retract height, check for second move to feed height
+                                match = regGcode.match(lineNext)
+                                if match.lastindex != 0:
+                                    match = match.groupdict()
+                                    Ztmp = match["Z"]                                                
+                                    if Ztmp != None and len(match["XY"]) == 0:
+                                        # Assume this is feed height. This is wrong if threading/boring
+                                        # from the bottom of a hole
+                                        Zfeed = float(Ztmp)
+
                             if Gcode == 1:
                                 if Ztmp != None:
-                                    if len(match["XY"]) == 0:
-                                        # Z move only
-                                        if Zfeed == None:
-                                            # Have first Z-only move, make it rapid
-                                            Zfeed = Zcur
-                                            # Replace line with rapid move
-                                            line1 = constRapidZgcode.format(Zcur, line1[:-1])
-                                            fFirstG1 = True
-                                            Gcode = 0
-
-                                            # First move was retract height, check for second move to feed height
-                                            match = regGcode.match(line)
-                                            if match.end() != 0:
-                                                match = match.groupdict()
-                                                Ztmp = match["Z"]                                                
-                                                if Ztmp != None and len(match["XY"]) == 0:
-                                                    # Assume this is feed height. This is wrong if threading/boring
-                                                    # from the bottom of a hole
-                                                    Zfeed = float(Ztmp)
-
-                                        elif Zcur >= Zlast or Zcur >= Zfeed or feedCur == 0:
+                                    if len(XYcur) == 0 and (Zcur >= Zlast or Zcur >= Zfeed or feedCur == 0):
                                             # Upward move, above feed height, or anomalous feed rate.
                                             # Replace with rapid move
-                                            line1 = constRapidZgcode.format(Zcur, line1[:-1])
+                                            line = constRapidZgcode.format(Zcur, line[:-1])
                                             fFirstG1 = True
                                             Gcode = 0
 
                                 elif Zcur >= Zfeed:
                                     # No Z move, at/above feed height
-                                    line1 = constRapidXYgcode.format(match["XY"].rstrip("\n "), line1[:-1])
+                                    line = constRapidXYgcode.format(XYcur, line[:-1])
                                     fFirstG1 = True
                                     Gcode = 0
+
+                            elif fFirstG1 and GcodeTmp == None:
+                                # No G-code present, changing to G1
+                                if Ztmp != None:
+                                    if len(XYcur) != 0:
+                                        # Not Z move only - back to G1
+                                        line = constFeedXYZgcode.format(XYcur, Zcur, feedCur, line[:-1])
+                                        fFirstG1 = False
+                                        Gcode = 1
+                                    elif Zcur < Zfeed and Zcur <= Zlast:
+                                        # Not up nor above feed height - back to G1
+                                        line = constFeedZgcode.format(Zcur, feedCur, line[:-1])
+                                        fFirstG1 = False
+                                        Gcode = 1
+                                        
+                                elif len(XYcur) != 0 and Zcur < Zfeed:
+                                    # No Z move, below feed height - back to G1
+                                    line = constFeedXYgcode.format(XYcur, feedCur, line[:-1])
+                                    fFirstG1 = False
+                                    Gcode = 1
 
                             if (Gcode == 1 and fFirstG1):
                                 if (feedTmp == None):
                                     # Feed rate not present, add it
-                                    line1 = line1[:-1] + constAddFeedGcode.format(feedCur)
+                                    line = line[:-1] + constAddFeedGcode.format(feedCur)
                                 fFirstG1 = False
 
                             if Zcur != None and Zfeed != None and Zcur > Zfeed and Gcode != None and \
-                                Gcode != 0 and len(match["XY"]) != 0 and (Ztmp != None or Gcode != 1):
+                                Gcode != 0 and len(XYcur) != 0 and (Ztmp != None or Gcode != 1):
                                 # We're above the feed height, but made a cutting move.
                                 # Feed height is wrong, bring it up
                                 Zfeed = Zcur + 0.001
@@ -949,17 +1039,20 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                             fFastZ = False # Just skip changes
 
                 # copy line to output
-                if fFirst or fHavBody:
-                    fileBody.write(line2)
-                    line2 = line1
-                    line1 = line
+                fileBody.write(line)
+                line = lineNext
 
+            # Found tail of program
+            if fFirst:
+                tailGcode = line + lineNext + fileOp.read()
             fFirst = False
             fileOp.close()
             os.remove(fileOp.name)
             fileOp = None
 
-        # Completed all operations
+        # Completed all operations, add tail
+        fileBody.write(tailGcode)
+
         # Copy body to head
         fileBody.close()
         fileBody = open(fileBody.name)  # open for reading
@@ -967,9 +1060,6 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         fileBody.close()
         os.remove(fileBody.name)
         fileBody = None
-
-        # Append the ending line
-        fileHead.write(constEndProgramGcode)
         fileHead.close()
         fileHead = None
 
