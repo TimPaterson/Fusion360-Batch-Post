@@ -409,7 +409,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                                                           True,
                                                           "",
                                                           docSettings["numericName"])
-            input.tooltip = "Name Must Be Numeric"
+            input.tooltip = "Output File Name Must Be Numeric"
             input.tooltipDescription = (
                 "The name of the setup will not be used in the file name, "
                 "only sequence numbers. The option to prepend sequence numbers "
@@ -1080,7 +1080,13 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         # Copy body to head
         fileBody.close()
         fileBody = open(fileBody.name)  # open for reading
-        fileHead.write(fileBody.read())
+        # copy in chunks
+        while True:
+            block = fileBody.read(10240)
+            if len(block) == 0:
+                break
+            fileHead.write(block)
+            block = None    # free memory
         fileBody.close()
         os.remove(fileBody.name)
         fileBody = None
