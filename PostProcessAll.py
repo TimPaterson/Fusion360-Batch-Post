@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 5
+version = 6
 
 # Initial default values of settings
 defaultSettings = {
@@ -20,6 +20,8 @@ defaultSettings = {
     "splitSetup" : False,
     "fastZ" : False,
     "toolChange" : "M9 G30",
+    "fileExt" : ".nc",
+    "numericName" : False,
     # Groups are expanded or not
     "groupOutput" : True,
     "groupPersonal" : True,
@@ -39,7 +41,7 @@ constSettingsFileExt = ".settings"
 constGcodeFileExt = ".nc"
 constPostLoopDelay = 0.1
 constBodyTmpFile = "$body"
-constOpTmpFile = "$op"
+constOpTmpFile = "99"   # in case name must be numeric
 constRapidZgcode = 'G00 Z{} (Changed from: "{}")\n'
 constRapidXYgcode = 'G00 {} (Changed from: "{}")\n'
 constFeedZgcode = 'G01 Z{} F{} (Changed from: "{}")\n'
@@ -197,12 +199,12 @@ def InitAddIn():
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
 
-def CountOutputFolderFiles(folder, limit):
+def CountOutputFolderFiles(folder, limit, fileExt):
     cntFiles = 0
     cntNcFiles = 0
     for path, dirs, files in os.walk(folder):
         for file in files:
-            if file.endswith(constGcodeFileExt):
+            if file.endswith(fileExt):
                 cntNcFiles += 1
             else:
                 cntFiles += 1
@@ -395,11 +397,29 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             input.tooltipDescription = (
                 "Full path name of the post processor (.cps file).")
             
+            # Browse for post processor
             input = inputGroup.children.addBoolValueInput("browsePost", "Browse", False)
             input.resourceFolder = "resources/Browse"
             input.tooltip = "Browse for Post Processor"
             inputGroup.isExpanded = docSettings["groupPost"]
 
+            # Numeric name required?
+            input = inputGroup.children.addBoolValueInput("numericName",
+                                                          "Name must be numeric",
+                                                          True,
+                                                          "",
+                                                          docSettings["numericName"])
+            input.tooltip = "Name Must Be Numeric"
+            input.tooltipDescription = (
+                "The name of the setup will not be used in the file name, "
+                "only sequence numbers. The option to prepend sequence numbers "
+                "will have no effect.")
+
+            # File name extension
+            input = inputGroup.children.addStringValueInput("fileExt", "Output file extension", docSettings["fileExt"])
+            #input.isFullWidth = True
+            input.tooltip = "Output File Extension"
+            
             # button to save default settings
             input = inputs.addBoolValueInput("save", "Save these settings as system default", False)
             input.resourceFolder = "resources/Save"
@@ -602,7 +622,7 @@ def PerformPostProcess(docSettings):
                 # make sure we're not going to delete too much
                 outputFolder = docSettings["output"]
                 if docSettings["delFolder"]:
-                    strMsg = CountOutputFolderFiles(outputFolder, setups.count)
+                    strMsg = CountOutputFolderFiles(outputFolder, setups.count, docSettings["fileExt"])
                     if strMsg:
                         docSettings["delFolder"] = False
                         strMsg = (
@@ -685,12 +705,15 @@ def PerformPostProcess(docSettings):
 
                             # prepend sequence number if enabled
                             fname = nameList[i].strip()
-                            if docSettings["sequence"]:
+                            if docSettings["sequence"] or docSettings["numericName"]:
                                 seq = seqDict[setupFolder]
                                 seqStr = str(seq)
                                 if docSettings["twoDigits"] and seq < 10:
                                     seqStr = "0" + seqStr
-                                fname = seqStr + ' ' + fname
+                                if docSettings["numericName"]:
+                                    fname = seqStr
+                                else:
+                                    fname = seqStr + ' ' + fname
 
                             # post the file
                             status = PostProcessSetup(fname, setup, setupFolder, docSettings)
@@ -751,7 +774,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         # Create PostProcessInput
         opName = fname
         if docSettings["splitSetup"]:
-            opName += constOpTmpFile
+            opName = constOpTmpFile + opName
         postInput = adsk.cam.PostProcessInput.create(opName, 
                                                     docSettings["post"], 
                                                     setupFolder, 
@@ -770,9 +793,10 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
         # Split setup into individual operations
         path = setupFolder + "/" + fname
+        fileExt = docSettings["fileExt"]
         pathlib.Path(setupFolder).mkdir(parents=True, exist_ok=True)
-        fileHead = open(path + constGcodeFileExt, "w")
-        fileBody = open(path + constBodyTmpFile + constGcodeFileExt, "w")
+        fileHead = open(path + fileExt, "w")
+        fileBody = open(path + constBodyTmpFile + fileExt, "w")
         fFirst = True
         lineNum = 10
         toolLast = -1
@@ -827,7 +851,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
                 time.sleep(delay) # wait for it to finish (??)
                 try:
-                    fileOp = open(path + constOpTmpFile + constGcodeFileExt)
+                    fileOp = open(setupFolder + "/" + opName + fileExt)
                     break
                 except:
                     delay *= 2
@@ -873,8 +897,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                     break;
 
                 if fFirst:
-                    if line[1:].startswith(fname):
-                        line = "(" + fname + ")\n"    # correct file name
+                    if line[1:].upper().startswith(opName.upper()):
+                        line = "(" + fname + line[len(opName) + 1:]    # correct file name
                     fileHead.write(line)
                 line = fileOp.readline()
 
