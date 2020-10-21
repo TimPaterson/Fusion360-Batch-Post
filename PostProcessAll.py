@@ -50,6 +50,7 @@ constFeedXYZgcode = 'G01 {} Z{} F{} (Changed from: "{}")\n'
 constAddFeedGcode = " F{} (Feed rate added)\n"
 constMotionGcodeSet = {0,1,2,3,33,38,73,76,80,81,82,84,85,86,87,88,89}
 constEndMcodeSet = {5,9,30}
+constLineNumInc = 5
 
 # Errors in post processing
 class PostError(enum.Enum):
@@ -366,6 +367,10 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "(return to home). The code will be placed on the line before the "
                 "tool change. You can get mulitple lines by separating them with "
                 "a colon (:)."
+                "<p>If you want a line number, just put a dummy line number in front. "
+                "If you use the colon to get multiple lines, only put the dummy line "
+                "number on the first line. For example, <b>N10 M9:G30</b> will give "
+                "you two lines, both with properly sequenced line numbers.</p>"
             )
             label.tooltip = input.tooltip
             label.tooltipDescription = input.tooltipDescription
@@ -799,19 +804,34 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         fileBody = open(path + constBodyTmpFile + fileExt, "w")
         fFirst = True
         lineNum = 10
-        toolLast = -1
+        regToolComment = re.compile(r"\(T[0-9]+\s")
+        fFastZenabled = docSettings["fastZ"]
+        regBody = re.compile(r""
+            "(?P<N>N[0-9]+ *)?" # line number
+            "(?P<line>"         # line w/o number
+            "(T(?P<T>[0-9]+))?" # Tool
+            "(M(?P<M>[0-9]+))?" # M-code
+            ".+)",              # to end of line
+            re.IGNORECASE | re.DOTALL)
         toolChange = docSettings["toolChange"]
+        fToolChangeNum = False
         if len(toolChange) != 0:
             toolChange = toolChange.replace(":", "\n")
             toolChange += "\n"
-        regToolComment = re.compile(r"\(T[0-9]+\s")
-        fFastZenabled = docSettings["fastZ"]
+            match = regBody.match(toolChange).groupdict()
+            if match["N"] != None:
+                fToolChangeNum = True
+                toolChange = match["line"]
+                # split in individual lines to add line numbers
+                toolChange = toolChange.splitlines(True)
         if fFastZenabled:
-            regGcode = re.compile(r"(G(?P<G>[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+            regGcode = re.compile(r""
+                "(G(?P<G>[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
                 "(?P<XY>((X-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
                 "((Y-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?)"
                 "(Z(?P<Z>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
-                "(F(?P<F>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?")
+                "(F(?P<F>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?",
+                re.IGNORECASE)
 
         i = 0;
         ops = setup.allOperations;
@@ -865,14 +885,13 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             # % <optional>
             # (<comments>) <0 or more lines>
             # (<Txx tool comment>) <optional>
-            # (<comments>) <0 or more lines>
-            # Gxx ... <1 or more lines of G-code initialization>
+            # <comments or G-code initialization, up to Txx>
             #
             # This header is stripped from all files after the first,
             # except the tool comment is put in a list at the top.
             # The header ends when we find the body, which starts with:
             #
-            # Nxx ... <or> Txx ...
+            # Txx ...   (optionally preceded by line number Nxx)
             #
             # We copy all the body, looking for the tail. The start
             # of the tail is marked by one of these:
@@ -890,38 +909,61 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
             # check for initial comments and tool
             # send it to header
-            while line[0] == "(" or line[0] == "\n":
+            while line[0] == "(" or line[0] == "O" or line[0] == "\n":
                 if regToolComment.match(line) != None:
                     fileHead.write(line)
                     line = fileOp.readline()
                     break;
 
                 if fFirst:
-                    if line[1:].upper().startswith(opName.upper()):
-                        line = "(" + fname + line[len(opName) + 1:]    # correct file name
+                    pos = line.upper().find(opName.upper())
+                    if pos != -1:
+                        pos += len(opName)
+                        if docSettings["numericName"]:
+                            fill = "0" * (pos - len(fname) - 1)
+                        else:
+                            fill = ""
+                        line = line[0] + fill + fname + line[pos:]    # correct file name
                     fileHead.write(line)
                 line = fileOp.readline()
 
-            # continue check for comments, but send to body if first operation
-            while line[0] == "(" or line[0] == "\n":
-                if fFirst:
-                    fileBody.write(line)
-                line = fileOp.readline()
-            
-            # Body starts at next T or N
+            # Body starts at tool code, T
             # Grab preceding comment if present
             linePrev = " "
+            fPrevNum = False
             while True:
-                ch = line[0]
-                if ch == "T" or ch == "N":
+                match = regBody.match(line).groupdict();
+                line = match["line"]        # filter off line number if present
+                fNum = match["N"] != None
+                toolCur = match["T"]
+                if (toolCur != None):
+                    toolCur = int(toolCur)
                     if not fFirst:
                         fileBody.write("\n")
                         if linePrev[0] == "(":
+                            if (fPrevNum):
+                                fileBody.write("N" + str(lineNum) + " ")
+                                lineNum += constLineNumInc
                             fileBody.write(linePrev)
+                        # Is this a tool change?
+                        if toolCur != toolLast and len(toolChange) != 0:
+                            if fToolChangeNum:
+                                # Add line number to tool change
+                                for code in toolChange:
+                                    fileBody.write("N" + str(lineNum) + " " + code)
+                                    lineNum += constLineNumInc
+                            else:
+                                fileBody.write(toolChange)
+                    toolLast = toolCur
                     break;
+
                 if (fFirst):
+                    if (fNum):
+                        fileBody.write("N" + str(lineNum) + " ")
+                        lineNum += constLineNumInc
                     fileBody.write(line)
                 linePrev = line
+                fPrevNum = fNum
                 line = fileOp.readline()
 
             # We're done with the head, move on to the body
@@ -933,46 +975,19 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             feedCur = 0
             fFirstG1 = False
 
+            # Note that match, line, and fNum are already set
             while True:
                 lineNext = fileOp.readline()    # Look ahead one line
 
-                if len(line) == 0:
+                # End of program marker?
+                Mtmp = match["M"]
+                if Mtmp != None and int(Mtmp) in constEndMcodeSet:
                     break
 
-                ch = line[0]
-
-                # Have a line number?
-                if ch == "N":
-                    pos = line.find("(")
-                    line = "N" + str(lineNum) + (line[pos:] if pos != -1 else "\n")
-                    lineNum += 10
-
-                # Have a tool change?
-                elif ch == "T":
-                    pos = line.find(" ")
-                    try:
-                        toolCur = int(line[1:pos])
-                    except:
-                        raise FileFormatError
-                    # Is this a tool change?
-                    if toolCur != toolLast and toolLast != -1:
-                        fileBody.write(toolChange)
-                    toolLast = toolCur
-
-                # End of program marker?
-                elif ch == "M":
-                    pos = line.find(" ")
-                    try:
-                        Mcur = int(float(line[1:pos]))
-                    except:
-                        raise FileFormatError
-                    if Mcur in constEndMcodeSet:
-                        break
-
-                elif fFastZ:
+                if fFastZ:
                     # Analyze code for chances to make rapid moves
                     match = regGcode.match(line)
-                    if match.lastindex != 0:
+                    if match.end() != 0:
                         try:
                             match = match.groupdict()
                             GcodeTmp = match["G"]
@@ -1005,7 +1020,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
                                 # First move was retract height, check for second move to feed height
                                 match = regGcode.match(lineNext)
-                                if match.lastindex != 0:
+                                if match.end() != 0:
                                     match = match.groupdict()
                                     Ztmp = match["Z"]                                                
                                     if Ztmp != None and len(match["XY"]) == 0:
@@ -1063,19 +1078,37 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                             fFastZ = False # Just skip changes
 
                 # copy line to output
+                if (fNum):
+                    fileBody.write("N" + str(lineNum) + " ")
+                    lineNum += constLineNumInc
                 fileBody.write(line)
-                line = lineNext
+                if len(lineNext) == 0:
+                    line = ""
+                    break
+                lineFull = lineNext
+                match = regBody.match(lineNext).groupdict()
+                line = match["line"]        # filter off line number if present
+                fNum = match["N"] != None
 
             # Found tail of program
             if fFirst:
-                tailGcode = line + lineNext + fileOp.read()
+                tailGcode = lineFull + fileOp.read()
             fFirst = False
             fileOp.close()
             os.remove(fileOp.name)
             fileOp = None
 
         # Completed all operations, add tail
-        fileBody.write(tailGcode)
+        # Update line numbers if present
+        if len(tailGcode) != 0:
+            tailGcode = tailGcode.splitlines(True);
+            for code in tailGcode:
+                match = regBody.match(code).groupdict()
+                if match["N"] != None:
+                    fileBody.write("N" + str(lineNum) + " " + match["line"])
+                    lineNum += constLineNumInc
+                else:
+                    fileBody.write(code)
 
         # Copy body to head
         fileBody.close()

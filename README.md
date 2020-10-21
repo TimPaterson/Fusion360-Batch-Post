@@ -1,6 +1,7 @@
 # Fusion 360 CAM Batch Post Process Add-In
 #### NEW! Fixes tool change restriction in Fusion 360 for Personal Use
-See section below.
+Also restores rapid moves the free version of Fusion 360 limits to 
+feed-rate moves. See section below.
 
 ### Introduction
 This add-in for Fusion 360 will post-process all CAM setups at once.
@@ -91,6 +92,10 @@ To see the new command, go to the `Manufacture` workspace and select the
 `Milling` or `Turning`tab. The command appears on the toolbar next to
 the native Post Process command. It also appears in the Actions
 drop-down menu.
+
+If you give this add-in a try, please help compile a list of
+how it does with different post proecessors. Post new results
+-- success or failure -- on the Issues page.
 
 **New to Git?** A great Git GUI is [SmartGit](https://www.syntevo.com/smartgit/),
 which hobbyists can use for free. You just select `Clone...` from its
