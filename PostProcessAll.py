@@ -759,9 +759,6 @@ def PerformPostProcess(docSettings):
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
-class FileFormatError(Exception):
-    pass
-
 def PostProcessSetup(fname, setup, setupFolder, docSettings):
     ui = None
     fileHead = None
@@ -974,6 +971,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             Zfeed = None
             feedCur = 0
             fFirstG1 = False
+            fLockSpeed = False
 
             # Note that match, line, and fNum are already set
             while True:
@@ -981,8 +979,15 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
                 # End of program marker?
                 Mtmp = match["M"]
-                if Mtmp != None and int(Mtmp) in constEndMcodeSet:
-                    break
+                if Mtmp != None:
+                    Mtmp = int(Mtmp)
+                    if Mtmp in constEndMcodeSet:
+                        break
+                    # When M49/M48 is used to turn off speed changes, disable fast moves as well
+                    if Mtmp == 49:
+                        fLockSpeed = True
+                    elif Mtmp == 48:
+                        fLockSpeed = False
 
                 if fFastZ:
                     # Analyze code for chances to make rapid moves
@@ -1028,14 +1033,14 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                                         # from the bottom of a hole
                                         Zfeed = float(Ztmp)
 
-                            if Gcode == 1:
+                            if Gcode == 1 and not fLockSpeed:
                                 if Ztmp != None:
                                     if len(XYcur) == 0 and (Zcur >= Zlast or Zcur >= Zfeed or feedCur == 0):
-                                            # Upward move, above feed height, or anomalous feed rate.
-                                            # Replace with rapid move
-                                            line = constRapidZgcode.format(Zcur, line[:-1])
-                                            fFirstG1 = True
-                                            Gcode = 0
+                                        # Upward move, above feed height, or anomalous feed rate.
+                                        # Replace with rapid move
+                                        line = constRapidZgcode.format(Zcur, line[:-1])
+                                        fFirstG1 = True
+                                        Gcode = 0
 
                                 elif Zcur >= Zfeed:
                                     # No Z move, at/above feed height
@@ -1128,9 +1133,6 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
         return PostError.Success
 
-    except FileFormatError:
-        retVal = PostError.BadFormat
-        # Fall into all other errors
     except:
         if fileHead:
             try:
