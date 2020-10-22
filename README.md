@@ -68,17 +68,18 @@ moves. This analysis is experimental and should be reviewed
 before use (comments are included where the G-code is changed).
 You are responsible for ensuring a tool crash does not occur.
 ### Installation
-To install, start by putting the PostProcessAll.* files along with
-the "resources" subfolder into a folder on your machine. This can
-be a Git repository or just a copy of the files. (The ReadMe.md
-file and ReadMeImages folder are not required.) Using Git is
+To install, start by putting the `PostProcessAll.py` and 
+`PostProcessAll.manifest` files along with
+the `resources` subfolder into a folder on your machine. This can
+be a Git repository or just a copy of the files. (The `ReadMe.md`
+file and `ReadMeImages` folder are not required.) Using Git is
 recommended (newcomers see below) because it makes it easy to
 come back and get updates.
 
 In Fusion 360, go to the `Tools` tab in the `Design` workspace, or the
 `Utilities` tab in the `Manufacture` workspace. Select the
-`Add-Ins` command, which will bring up the Scripts and Add-Ins dialog.
-Switch to the `Add-Ins` tab, then click the green "+" to add a new
+`Add-Ins` command, which will bring up the `Scripts and Add-Ins` dialog.
+Switch to the `Add-Ins` tab, then click the green `+` to add a new
 add-in. You can now browse to the folder in which you placed the
 Post Process All add-in files.
 
@@ -100,7 +101,8 @@ how it does with different post proecessors. Post new results
 **New to Git?** A great Git GUI is [SmartGit](https://www.syntevo.com/smartgit/),
 which hobbyists can use for free. You just select `Clone...` from its
 `Repository` menu, and paste in the address of this web page. That will
-bring in a copy of this add-in that's ready to use.
+bring in a copy of this add-in that's ready to use. To update, click
+`Pull` and then `Pull` again.
 
 ### Issues
 If the command fails, run it again. There seem to be occasional timing 

@@ -1,0 +1,13 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"addin",
+	"id":	"fec886de-a491-46e4-84c5-2bc0d4549040",
+	"author":	"Tim Paterson",
+	"description":	{
+		"":	"Post process all CAM setups, optionally putting G-code files in subfolders and prepending a sequence number."
+	},
+	"version":	"1.0",
+	"runOnStartup":	true,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true
+}
