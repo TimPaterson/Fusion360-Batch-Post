@@ -86,8 +86,9 @@ Post Process All add-in files.
 Once the folder is selected, you will be returned to the Add-Ins dialog
 and find that PostProcessAll now appears in the list of `My Add-Ins`.
 Select it in the list, ensure `Run on Startup` is checked, and then
-click the `Run` button. That's it! Fusion 360 will load the add-in every
-time it starts up.
+click the `Run` button. It should like like this:
+
+![AddIn Image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/FusionAddIn.PNG)
 
 To see the new command, go to the `Manufacture` workspace and select the
 `Milling` or `Turning`tab. The command appears on the toolbar next to
@@ -96,7 +97,8 @@ drop-down menu.
 
 If you give this add-in a try, please help compile a list of
 how it does with different post proecessors. Post new results
--- success or failure -- on the Issues page.
+— success or failure — on the Issues page. That info will make
+it into the table below.
 
 **New to Git?** A great Git GUI is [SmartGit](https://www.syntevo.com/smartgit/),
 which hobbyists can use for free. You just select `Clone...` from its
@@ -113,3 +115,23 @@ tested, and work is ongoing. Given that there are
 very specific assumptions about what the G-code input will look like,
 it would not be surprising to find problems come up. Feel free to report
 them on the Issues page, and include the G-code files.
+
+### Compatibility
+Compatibility can be an issue if you have Fusion 360 for Personal Use and
+therefore select the `Use individual operations` option. This requires
+parsing the G-code, which is dependent on the post processor you use.
+
+Here is a list of the post processors that have been tested with the add-in.
+The `Review OK?` column means a visual inspection of output, while
+`Tested` means it has been run on the CNC machine. The remaining entries
+are the suggested option settings for that post processor.
+This table is based on user feedback. Please add an issue for
+corrections or additions.
+
+| Post Processor | Review OK? | Tested | Tool change |  Numeric Name | File Ext. |
+|----           | :----: | :----: |----    | :----: |---- |
+| centroid.cps  | Yes | No  | N10 M9:G28 G91 Z0.:G90 | Yes | .nc  |
+| eding.cps     | Yes | No  | N10 M9:G28             | No  | .cnc |
+| gbrl.cps      | Yes | Yes | M9:G28 G91 Z0:G90      | No  | .nc  |
+| mach3mill.cps | Yes | No  | M5 M9:G28 G91 Z0.:G90  | No  | .tap |
+| tormach.cps   | Yes | Yes | M9 G30                 | No  | .nc  |

@@ -819,7 +819,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             if match["N"] != None:
                 fToolChangeNum = True
                 toolChange = match["line"]
-                # split in individual lines to add line numbers
+                # split into individual lines to add line numbers
                 toolChange = toolChange.splitlines(True)
         if fFastZenabled:
             regGcode = re.compile(r""
@@ -969,14 +969,13 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             Gcode = None
             Zcur = None
             Zfeed = None
+            fZfeedNotSet = True
             feedCur = 0
             fFirstG1 = False
             fLockSpeed = False
 
             # Note that match, line, and fNum are already set
             while True:
-                lineNext = fileOp.readline()    # Look ahead one line
-
                 # End of program marker?
                 Mtmp = match["M"]
                 if Mtmp != None:
@@ -1014,24 +1013,16 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
                             XYcur = match["XY"].rstrip("\n ")
 
-                            if Zfeed == None and (Gcode == 0 or Gcode == 1) and Ztmp != None and len(XYcur) == 0:
+                            if (Zfeed == None or fZfeedNotSet) and (Gcode == 0 or Gcode == 1) and Ztmp != None and len(XYcur) == 0:
                                 # Figure out Z feed
+                                if (Zfeed != None):
+                                    fZfeedNotSet = False
                                 Zfeed = Zcur
                                 if Gcode != 0:
                                     # Replace line with rapid move
                                     line = constRapidZgcode.format(Zcur, line[:-1])
                                     fFirstG1 = True
                                     Gcode = 0
-
-                                # First move was retract height, check for second move to feed height
-                                match = regGcode.match(lineNext)
-                                if match.end() != 0:
-                                    match = match.groupdict()
-                                    Ztmp = match["Z"]                                                
-                                    if Ztmp != None and len(match["XY"]) == 0:
-                                        # Assume this is feed height. This is wrong if threading/boring
-                                        # from the bottom of a hole
-                                        Zfeed = float(Ztmp)
 
                             if Gcode == 1 and not fLockSpeed:
                                 if Ztmp != None:
@@ -1087,11 +1078,10 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                     fileBody.write("N" + str(lineNum) + " ")
                     lineNum += constLineNumInc
                 fileBody.write(line)
-                if len(lineNext) == 0:
-                    line = ""
+                lineFull = fileOp.readline()
+                if len(lineFull) == 0:
                     break
-                lineFull = lineNext
-                match = regBody.match(lineNext).groupdict()
+                match = regBody.match(lineFull).groupdict()
                 line = match["line"]        # filter off line number if present
                 fNum = match["N"] != None
 
