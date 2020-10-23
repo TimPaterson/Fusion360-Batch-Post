@@ -806,8 +806,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         regBody = re.compile(r""
             "(?P<N>N[0-9]+ *)?" # line number
             "(?P<line>"         # line w/o number
-            "(T(?P<T>[0-9]+))?" # Tool
-            "(M(?P<M>[0-9]+))?" # M-code
+            "([^T]*T(?P<T>[0-9]+))?" # Tool
+            "([^M]*M(?P<M>[0-9]+))?" # M-code
             ".+)",              # to end of line
             re.IGNORECASE | re.DOTALL)
         toolChange = docSettings["toolChange"]
