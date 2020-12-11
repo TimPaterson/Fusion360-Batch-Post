@@ -1,7 +1,7 @@
 #Author-Tim Paterson
 #Description-Post process all CAM setups, using the setup name as the output file name.
 
-import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, time, re, pathlib, enum
+import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, time, re, pathlib, enum, tempfile
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
@@ -40,8 +40,8 @@ constAttrName = "settings"
 constSettingsFileExt = ".settings"
 constGcodeFileExt = ".nc"
 constPostLoopDelay = 0.1
-constBodyTmpFile = "$body"
-constOpTmpFile = "99"   # in case name must be numeric
+constBodyTmpFile = "gcodeBody"
+constOpTmpFile = "9900100"   # in case name must be numeric
 constRapidZgcode = 'G00 Z{} (Changed from: "{}")\n'
 constRapidXYgcode = 'G00 {} (Changed from: "{}")\n'
 constFeedZgcode = 'G01 Z{} F{} (Changed from: "{}")\n'
@@ -775,11 +775,13 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
         # Create PostProcessInput
         opName = fname
+        opFolder = setupFolder
         if docSettings["splitSetup"]:
-            opName = constOpTmpFile + opName
+            opName = constOpTmpFile
+            opFolder = tempfile.gettempdir()
         postInput = adsk.cam.PostProcessInput.create(opName, 
                                                     docSettings["post"], 
-                                                    setupFolder, 
+                                                    opFolder, 
                                                     docSettings["units"])
         postInput.isOpenInEditor = False
 
@@ -798,7 +800,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         fileExt = docSettings["fileExt"]
         pathlib.Path(setupFolder).mkdir(parents=True, exist_ok=True)
         fileHead = open(path + fileExt, "w")
-        fileBody = open(path + constBodyTmpFile + fileExt, "w")
+        fileBody = open(opFolder + "/" + constBodyTmpFile + fileExt, "w")
         fFirst = True
         lineNum = 10
         regToolComment = re.compile(r"\(T[0-9]+\s")
@@ -868,7 +870,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
                 time.sleep(delay) # wait for it to finish (??)
                 try:
-                    fileOp = open(setupFolder + "/" + opName + fileExt)
+                    fileOp = open(opFolder + "/" + opName + fileExt)
                     break
                 except:
                     delay *= 2
