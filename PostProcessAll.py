@@ -970,10 +970,13 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             # Grab preceding comment if present
             linePrev = " "
             fPrevNum = False
+            fBody = False
             while True:
                 match = regBody.match(line).groupdict();
                 line = match["line"]        # filter off line number if present
                 fNum = match["N"] != None
+                if (fBody):
+                    break
                 toolCur = match["T"]
                 if (toolCur != None):
                     toolCur = int(toolCur)
@@ -985,16 +988,21 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                                 lineNum += constLineNumInc
                             fileBody.write(linePrev)
                         # Is this a tool change?
-                        if toolCur != toolLast and len(toolChange) != 0:
-                            if fToolChangeNum:
-                                # Add line number to tool change
-                                for code in toolChange:
-                                    fileBody.write("N" + str(lineNum) + " " + code)
-                                    lineNum += constLineNumInc
-                            else:
-                                fileBody.write(toolChange)
+                        if toolCur != toolLast:
+                            if len(toolChange) != 0:
+                                if fToolChangeNum:
+                                    # Add line number to tool change
+                                    for code in toolChange:
+                                        fileBody.write("N" + str(lineNum) + " " + code)
+                                        lineNum += constLineNumInc
+                                else:
+                                    fileBody.write(toolChange)
+                        else:
+                            fBody = True
+                            line = fileOp.readline()
+                            continue    # don't output tool line
                     toolLast = toolCur
-                    break;
+                    break
 
                 if (fFirst):
                     if (fNum):
