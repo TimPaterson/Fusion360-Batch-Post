@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 6
+version = 7
 
 # Initial default values of settings
 defaultSettings = {
@@ -22,10 +22,15 @@ defaultSettings = {
     "toolChange" : "M9 G30",
     "fileExt" : ".nc",
     "numericName" : False,
+    "homeEndsOp" : False,
     # Groups are expanded or not
     "groupOutput" : True,
     "groupPersonal" : True,
-    "groupPost" : True
+    "groupPost" : True,
+    "groupAdvanced" : False,
+    # Retry policy
+    "initialDelay" : 0.2,
+    "postRetries" : 3
 }
 
 # Constants
@@ -38,10 +43,9 @@ constCAMProductId = "CAMProductType"
 constAttrGroup = constCmdDefId
 constAttrName = "settings"
 constSettingsFileExt = ".settings"
-constGcodeFileExt = ".nc"
 constPostLoopDelay = 0.1
 constBodyTmpFile = "gcodeBody"
-constOpTmpFile = "9900100"   # in case name must be numeric
+constOpTmpFile = "9910"   # in case name must be numeric
 constRapidZgcode = 'G00 Z{} (Changed from: "{}")\n'
 constRapidXYgcode = 'G00 {} (Changed from: "{}")\n'
 constFeedZgcode = 'G01 Z{} F{} (Changed from: "{}")\n'
@@ -51,13 +55,6 @@ constAddFeedGcode = " F{} (Feed rate added)\n"
 constMotionGcodeSet = {0,1,2,3,33,38,73,76,80,81,82,84,85,86,87,88,89}
 constEndMcodeSet = {5,9,30}
 constLineNumInc = 5
-
-# Errors in post processing
-class PostError(enum.Enum):
-    Success = 0
-    Fail = 1
-    Except = 2
-    BadFormat = 3
 
 # Tool tip text
 toolTip = (
@@ -249,11 +246,11 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
 
             # check box to delete existing files
             input = inputs.addBoolValueInput("delFiles", 
-                                             "Delete existing files in each folder", 
+                                             "Delete existing files", 
                                              True, 
                                              "", 
                                              docSettings["delFiles"])
-            input.tooltip = "Delete Existing Files"
+            input.tooltip = "Delete Existing Files in Each Folder"
             input.tooltipDescription = (
                 "Delete all files in each output folder before post processing. "
                 "This will help prevent accumulation of G-code files which are "
@@ -270,12 +267,12 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
 
             # check box to delete entire output folder
             input = inputs.addBoolValueInput("delFolder", 
-                                             "Delete entire output folder first", 
+                                             "Delete output folder", 
                                              True, 
                                              "", 
                                              docSettings["delFolder"] and docSettings["delFiles"])
             input.isEnabled = docSettings["delFiles"] # enable only if delete existing files
-            input.tooltip = "Delete Output Folder"
+            input.tooltip = "Delete Entire Output Folder First"
             input.tooltipDescription = (
                 "Delete the entire output folder before post processing. This "
                 "deletes all files and subfolders regardless of whether or not "
@@ -289,11 +286,11 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
 
             # check box to prepend sequence numbers
             input = inputs.addBoolValueInput("sequence", 
-                                             "Prepend sequence number to name", 
+                                             "Prepend sequence number", 
                                              True, 
                                              "", 
                                              docSettings["sequence"])
-            input.tooltip = "Add Sequence Numbers"
+            input.tooltip = "Add Sequence Numbers to Name"
             input.tooltipDescription = (
                 "Begin each file name with a sequence number. The numbering "
                 "represents the order that the setups appear in the browser tree. "
@@ -301,7 +298,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
 
             # check box to select 2-digit sequence numbers
             input = inputs.addBoolValueInput("twoDigits", 
-                                             "Use 2-digit sequence numbers", 
+                                             "Use 2-digit numbers", 
                                              True, 
                                              "", 
                                              docSettings["twoDigits"])
@@ -350,7 +347,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             # text box as a label for tool change command
             input = inputGroup.children.addTextBoxCommandInput("toolLabel", 
                                                                "", 
-                                                               "G-code to precede tool change:",
+                                                               "G-code for tool change:",
                                                                1,
                                                                True)
             input.isFullWidth = True
@@ -360,7 +357,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             input = inputGroup.children.addStringValueInput("toolChange", "", docSettings["toolChange"])
             input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
             input.isFullWidth = True
-            input.tooltip = "G-code for Tool Change"
+            input.tooltip = "G-code to Precede Tool Change"
             input.tooltipDescription = (
                 "Allows inserting a line of code before tool changes. For example, "
                 "you might want M5 (spindle stop), M9 (coolant stop), and/or G28 or G30 "
@@ -377,12 +374,12 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
            
             # check box to enable restoring rapid moves
             input = inputGroup.children.addBoolValueInput("fastZ",
-                                                          "Restore rapid moves (experimental)",
+                                                          "Restore rapid moves",
                                                           True,
                                                           "",
                                                           docSettings["fastZ"])
             input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
-            input.tooltip = "Restore Rapid Moves"
+            input.tooltip = "Restore Rapid Moves (Experimental)"
             input.tooltipDescription = (
                 "Replace appropriate moves at feed rate with rapid (G0) moves. "
                 "In Fusion 360 for Personal Use, moves that could be rapid are "
@@ -392,8 +389,39 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "<p><b>WARNING!<b> This option should be used with caution. "
                 "Review the G-code to verify it is correct. Comments have been "
                 "added to indicate the changes.")
+           
+            # G-code end marked by move home
+            input = inputGroup.children.addBoolValueInput("homeEndsOp",
+                                                          "Move home ends op",
+                                                          True,
+                                                          "",
+                                                          docSettings["homeEndsOp"])
+            input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
+            input.tooltip = "Move to Home Marks End of Operation"
+            input.tooltipDescription = (
+                "To combine operations generated individually, the ending sequence "
+                "(which should only appear once) must be found. This option includes "
+                "a return to home (G28/G30) in the set that marks the ending sequence."
+                "<p>You should select this option if you find that there is a G28 or "
+                "G30 at the end of each operation of a G-code file.")
             inputGroup.isExpanded = docSettings["groupPersonal"]
 
+            # Advanced -- retry settings
+            inputGroup = inputs.addGroupCommandInput("groupAdvanced", "Advanced")
+            # Time delay
+            input = inputGroup.children.addFloatSpinnerCommandInput("initialDelay", 
+                "Initial time allowance", "s", 0.1, 1.0, 0.1, docSettings["initialDelay"])
+            input.tooltip = "Initial Time to Post Process an Operation"
+            input.tooltipDescription = (
+                "Initial delay to wait for post processor. Doubled for each retry.")
+            # Retry count
+            input = inputGroup.children.addIntegerSpinnerCommandInput("postRetries", 
+                "Number of retries", 1, 9, 1, docSettings["postRetries"])
+            input.tooltip = "Number of Retries"
+            input.tooltipDescription = (
+                "Retries if post processing failed. Time delay is doubled each retry.")
+            inputGroup.isExpanded = docSettings["groupAdvanced"]
+            
             # post processor
             inputGroup = inputs.addGroupCommandInput("groupPost", "Post Processor")
             input = inputGroup.children.addStringValueInput("post", "", docSettings["post"])
@@ -422,13 +450,12 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
 
             # File name extension
             input = inputGroup.children.addStringValueInput("fileExt", "Output file extension", docSettings["fileExt"])
-            #input.isFullWidth = True
             input.tooltip = "Output File Extension"
             
             # button to save default settings
-            input = inputs.addBoolValueInput("save", "Save these settings as system default", False)
+            input = inputs.addBoolValueInput("save", "Save as default", False)
             input.resourceFolder = "resources/Save"
-            input.tooltip = "Save Default Settings"
+            input.tooltip = "Save These Settings as System Default"
             input.tooltipDescription = (
                 "Save these settings to use as the default for each new design.")
 
@@ -722,17 +749,11 @@ def PerformPostProcess(docSettings):
 
                             # post the file
                             status = PostProcessSetup(fname, setup, setupFolder, docSettings)
-                            if status == PostError.Success:
+                            if status == None:
                                 cntFiles += 1
                             else:
                                 cntSkipped += 1
-                                if status == PostError.Fail:
-                                    lstSkipped += "\nFailed: "
-                                elif status == PostError.BadFormat:
-                                    lstSkipped += "\nGcode file format not recognized: "
-                                else:
-                                    lstSkipped += "\nException: "
-                                lstSkipped += setup.name
+                                lstSkipped += "\nFailed on setup " + setup.name + ": " + status
                          
                     cntSetups += 1
                     progress.message = progressMsg.format(cntFiles)
@@ -764,7 +785,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
     fileHead = None
     fileBody = None
     fileOp = None
-    retVal = PostError.Except
+    retVal = "Fusion 360 reported an exception."
 
     try:
         app = adsk.core.Application.get()
@@ -789,11 +810,11 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         if not docSettings["splitSetup"]:
             try:
                 if not cam.postProcess(setup, postInput):
-                    return PostError.Fail
+                    return "Fusion 360 reported an error."
                 time.sleep(constPostLoopDelay) # files missing sometimes unless we slow down (??)
-                return PostError.Success
+                return None
             except:
-                return PostError.Except
+                return retVal
 
         # Split setup into individual operations
         path = setupFolder + "/" + fname
@@ -843,7 +864,10 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             # Look ahead for operations without a toolpath. This can happen
             # with a manual operation. Group it with current operation.
             # Or if first, group it with subsequent ones.
+            opHasTool = None
             hasTool = op.hasToolpath
+            if hasTool:
+                opHasTool = op
             opList = adsk.core.ObjectCollection.create()
             opList.add(op)
             while i < ops.count:
@@ -854,30 +878,46 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 if op.hasToolpath:
                     if not hasTool:
                         opList.add(op)
+                        opHasTool = op
                         i += 1
                     break;
                 opList.add(op)
                 i += 1
 
-            retries = 5
-            delay = constPostLoopDelay
+            opPath = opFolder + "/" + opName + fileExt
+            retries = docSettings["postRetries"]
+            delay = docSettings["initialDelay"]
             while True:
                 try:
                     if not cam.postProcess(opList, postInput):
-                        return PostError.Fail
+                        retVal = "Fusion 360 reported an error processing operation"
+                        if (opHasTool != None):
+                            retVal += ": " +  opHasTool.name
+                        return retVal
                 except:
-                    return PostError.Except
+                    return retVal
 
                 time.sleep(delay) # wait for it to finish (??)
                 try:
-                    fileOp = open(opFolder + "/" + opName + fileExt)
+                    fileOp = open(opPath)
                     break
                 except:
                     delay *= 2
                     retries -= 1
-                    if retries == 0:
-                        raise
-                    pass
+                    if retries > 0:
+                        continue;
+                    # Maybe the file name extension is wrong
+                    for file in os.listdir(opFolder):
+                        if file.startswith(opName):
+                            ext = file[len(opName):]
+                            if ext != fileExt:
+                                ui.messageBox("Unable to open output file. "
+                                    "Found the file with extension '{}' instead "
+                                    "of '{}'. Make sure you have the correct file "
+                                    "extension set in the Post Process All "
+                                    "dialog.".format(ext, fileExt))
+                            break;
+                    return "Unable to open " + opPath
             
             # Parse the gcode. We expect a header like this:
             #
@@ -989,6 +1029,9 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                         fLockSpeed = True
                     elif Mtmp == 48:
                         fLockSpeed = False
+
+                if docSettings["homeEndsOp"] and ("G28" in line or "G30" in line):
+                    break
 
                 if fFastZ:
                     # Analyze code for chances to make rapid moves
@@ -1123,7 +1166,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         fileHead.close()
         fileHead = None
 
-        return PostError.Success
+        return None
 
     except:
         if fileHead:
@@ -1147,7 +1190,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             except:
                 pass
 
-        if ui and retVal != PostError.BadFormat:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+        if ui:
+            retVal += " " + traceback.format_exc()
 
         return retVal
