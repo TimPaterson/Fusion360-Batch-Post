@@ -705,55 +705,51 @@ def PerformPostProcess(docSettings):
                     if progress.wasCancelled:
                         break
                     if not setup.isSuppressed and setup.allOperations.count != 0:
-                        if not cam.checkToolpath(setup):
-                            cntSkipped += 1
-                            lstSkipped += "\n" + setup.name
+                        nameList = setup.name.split(':')    # folder separator
+                        setupFolder = outputFolder
+                        cnt = len(nameList) - 1
+                        i = 0
+                        while i < cnt:
+                            setupFolder += "/" + nameList[i].strip()
+                            i += 1
+                    
+                        # keep a separate sequence number for each folder
+                        if setupFolder in seqDict:
+                            seqDict[setupFolder] += 1
                         else:
-                            nameList = setup.name.split(':')    # folder separator
-                            setupFolder = outputFolder
-                            cnt = len(nameList) - 1
-                            i = 0
-                            while i < cnt:
-                                setupFolder += "/" + nameList[i].strip()
-                                i += 1
-                        
-                            # keep a separate sequence number for each folder
-                            if setupFolder in seqDict:
-                                seqDict[setupFolder] += 1
-                            else:
-                                seqDict[setupFolder] = 1
-                                # first file for this folder
-                                if (docSettings["delFiles"]):
-                                    # delete all the files in the folder
-                                    try:
-                                        for entry in os.scandir(setupFolder):
-                                            if entry.is_file():
-                                                try:
-                                                    os.remove(entry.path)
-                                                except:
-                                                    pass #ignore errors
-                                    except:
-                                        pass #ignore errors
+                            seqDict[setupFolder] = 1
+                            # first file for this folder
+                            if (docSettings["delFiles"]):
+                                # delete all the files in the folder
+                                try:
+                                    for entry in os.scandir(setupFolder):
+                                        if entry.is_file():
+                                            try:
+                                                os.remove(entry.path)
+                                            except:
+                                                pass #ignore errors
+                                except:
+                                    pass #ignore errors
 
-                            # prepend sequence number if enabled
-                            fname = nameList[i].strip()
-                            if docSettings["sequence"] or docSettings["numericName"]:
-                                seq = seqDict[setupFolder]
-                                seqStr = str(seq)
-                                if docSettings["twoDigits"] and seq < 10:
-                                    seqStr = "0" + seqStr
-                                if docSettings["numericName"]:
-                                    fname = seqStr
-                                else:
-                                    fname = seqStr + ' ' + fname
-
-                            # post the file
-                            status = PostProcessSetup(fname, setup, setupFolder, docSettings)
-                            if status == None:
-                                cntFiles += 1
+                        # prepend sequence number if enabled
+                        fname = nameList[i].strip()
+                        if docSettings["sequence"] or docSettings["numericName"]:
+                            seq = seqDict[setupFolder]
+                            seqStr = str(seq)
+                            if docSettings["twoDigits"] and seq < 10:
+                                seqStr = "0" + seqStr
+                            if docSettings["numericName"]:
+                                fname = seqStr
                             else:
-                                cntSkipped += 1
-                                lstSkipped += "\nFailed on setup " + setup.name + ": " + status
+                                fname = seqStr + ' ' + fname
+
+                        # post the file
+                        status = PostProcessSetup(fname, setup, setupFolder, docSettings)
+                        if status == None:
+                            cntFiles += 1
+                        else:
+                            cntSkipped += 1
+                            lstSkipped += "\nFailed on setup " + setup.name + ": " + status
                          
                     cntSetups += 1
                     progress.message = progressMsg.format(cntFiles)
