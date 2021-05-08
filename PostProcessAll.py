@@ -895,7 +895,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
                 time.sleep(delay) # wait for it to finish (??)
                 try:
-                    fileOp = open(opPath)
+                    fileOp = open(opPath, encoding="utf8", errors='replace')
                     break
                 except:
                     delay *= 2
