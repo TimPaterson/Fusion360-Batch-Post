@@ -45,7 +45,7 @@ constAttrName = "settings"
 constSettingsFileExt = ".settings"
 constPostLoopDelay = 0.1
 constBodyTmpFile = "gcodeBody"
-constOpTmpFile = "9910"   # in case name must be numeric
+constOpTmpFile = "8910"   # in case name must be numeric
 constRapidZgcode = 'G00 Z{} (Changed from: "{}")\n'
 constRapidXYgcode = 'G00 {} (Changed from: "{}")\n'
 constFeedZgcode = 'G01 Z{} F{} (Changed from: "{}")\n'
@@ -781,7 +781,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
     fileHead = None
     fileBody = None
     fileOp = None
-    retVal = "Fusion 360 reported an exception."
+    retVal = "Fusion 360 reported an exception"
 
     try:
         app = adsk.core.Application.get()
@@ -809,7 +809,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                     return "Fusion 360 reported an error."
                 time.sleep(constPostLoopDelay) # files missing sometimes unless we slow down (??)
                 return None
-            except:
+            except Exception as exc:
+                retVal += ": " + str(exc)
                 return retVal
 
         # Split setup into individual operations
@@ -890,7 +891,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                         if (opHasTool != None):
                             retVal += ": " +  opHasTool.name
                         return retVal
-                except:
+                except Exception as exc:
+                    retVal += ": " + str(exc)
                     return retVal
 
                 time.sleep(delay) # wait for it to finish (??)
