@@ -826,8 +826,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         regBody = re.compile(r""
             "(?P<N>N[0-9]+ *)?" # line number
             "(?P<line>"         # line w/o number
+            "(M(?P<M>[0-9]+) *)?" # M-code
             "(T(?P<T>[0-9]+))?" # Tool
-            "(M(?P<M>[0-9]+))?" # M-code
             ".+)",              # to end of line
             re.IGNORECASE | re.DOTALL)
         toolChange = docSettings["toolChange"]
@@ -1010,6 +1010,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 linePrev = line
                 fPrevNum = fNum
                 line = fileOp.readline()
+                if len(line) == 0:
+                    return "Tool change G-code (Txx) not found; this post processor is not compatible with Post Process All."
 
             # We're done with the head, move on to the body
             # Initialize rapid move optimizations
