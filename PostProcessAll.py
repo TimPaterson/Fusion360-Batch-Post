@@ -937,6 +937,10 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             # M9 - stop coolant
             # The tail is stripped until the last operation is done.
 
+            # Space between operations
+            if not fFirst:
+                fileBody.write("\n")
+
             # % at start only
             line = fileOp.readline()
             if line[0] == "%":
@@ -966,8 +970,6 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
             # Body starts at tool code, T
             # Grab preceding comment if present
-            linePrev = " "
-            fPrevNum = False
             fBody = False
             while True:
                 match = regBody.match(line).groupdict();
@@ -979,12 +981,6 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 if (toolCur != None):
                     toolCur = int(toolCur)
                     if not fFirst:
-                        fileBody.write("\n")
-                        if linePrev[0] == "(":
-                            if (fPrevNum):
-                                fileBody.write("N" + str(lineNum) + " ")
-                                lineNum += constLineNumInc
-                            fileBody.write(linePrev)
                         # Is this a tool change?
                         if toolCur != toolLast:
                             if len(toolChange) != 0:
@@ -1002,13 +998,11 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                     toolLast = toolCur
                     break
 
-                if (fFirst):
+                if fFirst or line[0] == "(":
                     if (fNum):
                         fileBody.write("N" + str(lineNum) + " ")
                         lineNum += constLineNumInc
                     fileBody.write(line)
-                linePrev = line
-                fPrevNum = fNum
                 line = fileOp.readline()
                 if len(line) == 0:
                     return "Tool change G-code (Txx) not found; this post processor is not compatible with Post Process All."

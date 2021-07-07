@@ -97,7 +97,7 @@ drop-down menu.
 
 If you give `Post Process All` a try, please help compile a list of
 how it does with different post proecessors. Post new results
-— success or failure — on the Issues page. That info will make
+â€” success or failure â€” on the Issues page. That info will make
 it into the table below.
 
 **New to Git?** A great Git GUI is [SmartGit](https://www.syntevo.com/smartgit/),
@@ -132,9 +132,10 @@ corrections or additions.
 
 | Post Processor | Review OK? | Tested | Tool change |  Numeric Name | File Ext. |
 |----           | :----: | :----: |----    | :----: |---- |
-| centroid.cps  | Yes | No  | N10 M9:G28 G91 Z0.:G90 | Yes | .nc  |
+| centroid.cps  | Yes | Yes |                        | Yes | .nc  |
 | eding.cps     | Yes | No  | N10 M9:G28             | No  | .cnc |
 | gbrl.cps      | Yes | Yes | M9:G28 G91 Z0:G90      | No  | .nc  |
 | linuxcnc.cps  | Yes | No  | M9 G30                 | No  | .ngc |
-| mach3mill.cps | Yes | No  | M5 M9:G28 G91 Z0.:G90  | No  | .tap |
+| mach3mill.cps | Yes | Yes |                        | No  | .tap |
+| tinyg.cps     | Yes | Yes |                        | No  | .gcode |
 | tormach.cps   | Yes | Yes | M9 G30                 | No  | .nc  |
