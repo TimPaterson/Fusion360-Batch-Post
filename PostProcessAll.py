@@ -23,6 +23,7 @@ defaultSettings = {
     "fileExt" : ".nc",
     "numericName" : False,
     "endCodes" : "M5 M9 M30",
+    "onlySelected" : False,
     # Groups are expanded or not
     "groupOutput" : True,
     "groupPersonal" : True,
@@ -230,6 +231,14 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             app = adsk.core.Application.get()
             docSettings  = settingsMgr.GetSettings(app.activeDocument.attributes)
 
+            # See if we're doing only selected setups
+            selectedSetups = list()
+            product = app.activeDocument.products.itemByProductType(constCAMProductId)
+            if product != None:
+                for setup in product.setups:
+                    if setup.isSelected:
+                        selectedSetups.append(setup)
+                        
             # Add inputs that will appear in a dialog
             inputs = cmd.commandInputs
 
@@ -246,6 +255,20 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             input.resourceFolder = "resources/Browse"
             input.tooltip = "Browse for Output Folder"
             inputGroup.isExpanded = docSettings["groupOutput"]
+
+            # check box to use only selected setups
+            input = inputs.addBoolValueInput("onlySelected", 
+                                             "Only selected setups", 
+                                             True, 
+                                             "", 
+                                             docSettings["onlySelected"])
+            input.tooltip = "Only Process Selected Setups"
+            input.tooltipDescription = (
+                "Only setups selected in the browser will be processed. Note "
+                "that a selected setup will be highlighted, not simply activated. "
+                "Selecting individual operations within a setup has no effect."
+            )
+            input.isEnabled = len(selectedSetups) != 0
 
             # check box to delete existing files
             input = inputs.addBoolValueInput("delFiles", 
@@ -492,7 +515,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             handlers.append(onValidateInputs)
 
             # Connect to the execute event.
-            onExecute = CommandExecuteHandler(docSettings)
+            onExecute = CommandExecuteHandler(docSettings, selectedSetups)
             cmd.execute.add(onExecute)
             handlers.append(onExecute)
         except:
@@ -613,15 +636,16 @@ class CommandValidateInputsHandler(adsk.core.ValidateInputsEventHandler):
 
 # Event handler for the execute event.
 class CommandExecuteHandler(adsk.core.CommandEventHandler):
-    def __init__(self, docSettings):
+    def __init__(self, docSettings, selectedSetups):
         self.docSettings = docSettings
+        self.selectedSetups = selectedSetups
         super().__init__()
 
     def notify(self, args):
         eventArgs = adsk.core.CommandEventArgs.cast(args)
 
         # Code to react to the event.
-        PerformPostProcess(self.docSettings)
+        PerformPostProcess(self.docSettings, self.selectedSetups)
 
 
 def stop(context):
@@ -644,7 +668,7 @@ def stop(context):
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))	
 
 
-def PerformPostProcess(docSettings):
+def PerformPostProcess(docSettings, setups):
     ui = None
     progress = None
     try:
@@ -662,18 +686,22 @@ def PerformPostProcess(docSettings):
 
         if product != None:
             cam = adsk.cam.CAM.cast(product)
-            setups = cam.setups
+            if len(setups) == 0 or not docSettings["onlySelected"]:
+                setups = list()
+                # move all setups into a list
+                for setup in cam.setups:
+                    setups.append(setup)
             progress = ui.createProgressDialog()
             progress.isCancelButtonShown = True
             progress.show("Generating toolpaths...", "Beginning toolpath generation", 0, 1)
             progress.progressValue = 1; # try to get it to display
             progress.progressValue = 0;
 
-            if setups.count != 0 and cam.allOperations.count != 0:
+            if len(setups) != 0 and cam.allOperations.count != 0:
                 # make sure we're not going to delete too much
                 outputFolder = docSettings["output"]
                 if docSettings["delFolder"]:
-                    strMsg = CountOutputFolderFiles(outputFolder, setups.count, docSettings["fileExt"])
+                    strMsg = CountOutputFolderFiles(outputFolder, len(setups), docSettings["fileExt"])
                     if strMsg:
                         docSettings["delFolder"] = False
                         strMsg = (
@@ -715,7 +743,9 @@ def PerformPostProcess(docSettings):
                         pass #ignore errors
 
                 progressMsg = "{} files written to " + outputFolder
-                progress.show("Post Processing...", "", 0, setups.count)
+                progress.show("Post Processing...", "", 0, len(setups))
+                progress.progressValue = 1; # try to get it to display
+                progress.progressValue = 0;
 
                 cntSetups = 0
                 seqDict = dict()
@@ -963,7 +993,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             # Txx ...   (optionally preceded by line number Nxx)
             #
             # We copy all the body, looking for the tail. The start
-            # of the tail is marked by one of these:
+            # of the tail is denoted by any of a list of G-codes
+            # entered by the user. The defaults are:
             # M30 - end program
             # M5 - stop spindle
             # M9 - stop coolant
