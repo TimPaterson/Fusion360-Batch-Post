@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 7
+version = 8
 
 # Initial default values of settings
 defaultSettings = {
@@ -22,7 +22,7 @@ defaultSettings = {
     "toolChange" : "M9 G30",
     "fileExt" : ".nc",
     "numericName" : False,
-    "homeEndsOp" : False,
+    "endCodes" : "M5 M9 M30",
     # Groups are expanded or not
     "groupOutput" : True,
     "groupPersonal" : True,
@@ -53,7 +53,6 @@ constFeedXYgcode = 'G01 {} F{} (Changed from: "{}")\n'
 constFeedXYZgcode = 'G01 {} Z{} F{} (Changed from: "{}")\n'
 constAddFeedGcode = " F{} (Feed rate added)\n"
 constMotionGcodeSet = {0,1,2,3,33,38,73,76,80,81,82,84,85,86,87,88,89}
-constEndMcodeSet = {5,9,30}
 constLineNumInc = 5
 
 # Tool tip text
@@ -154,6 +153,10 @@ class SettingsManager:
         docAttr.add(constAttrGroup, constAttrName, json.dumps(docSettings))
             
     def UpdateSettings(self, src, dst):
+        if "homeEndsOp" in dst:
+            if dst["homeEndsOp"] and not ("endCodes" in dst):
+                dst["endCodes"] = "M5 M9 M30 G28 G30"
+            del dst["homeEndsOp"]
         for item in src:
             if not (item in dst):
                 dst[item] = src[item]
@@ -372,6 +375,34 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             label.tooltip = input.tooltip
             label.tooltipDescription = input.tooltipDescription
            
+            # text box as a label for operation end commands
+            input = inputGroup.children.addTextBoxCommandInput("endLabel", 
+                                                               "", 
+                                                               "G-codes that mark ending sequence:",
+                                                               1,
+                                                               True)
+            input.isFullWidth = True
+            label = input
+
+            # enter G-codes for end of operation
+            input = inputGroup.children.addStringValueInput("endCodes", "", docSettings["endCodes"])
+            input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
+            input.isFullWidth = True
+            input.tooltip = "G-codes That Mark the Ending Sequence"
+            input.tooltipDescription = (
+                "To combine operations generated individually, the ending sequence "
+                "(which should only appear once) must be found. This entry is the "
+                "list of G-codes that start this ending sequence. For example, M30 "
+                "(end program) would normally be here, but it may not be the first "
+                "G-code of the ending sequence. M5 (spindle stop), M9 (coolant "
+                "stop) and G28/G30 (move home) are also candidates, but you should "
+                "look at the code from your post processor to determine what "
+                "will work in your case. Any one of the G-codes you enter here "
+                "will mark the start of ending sequence."
+            )
+            label.tooltip = input.tooltip
+            label.tooltipDescription = input.tooltipDescription
+           
             # check box to enable restoring rapid moves
             input = inputGroup.children.addBoolValueInput("fastZ",
                                                           "Restore rapid moves",
@@ -390,20 +421,6 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "Review the G-code to verify it is correct. Comments have been "
                 "added to indicate the changes.")
            
-            # G-code end marked by move home
-            input = inputGroup.children.addBoolValueInput("homeEndsOp",
-                                                          "Move home ends op",
-                                                          True,
-                                                          "",
-                                                          docSettings["homeEndsOp"])
-            input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
-            input.tooltip = "Move to Home Marks End of Operation"
-            input.tooltipDescription = (
-                "To combine operations generated individually, the ending sequence "
-                "(which should only appear once) must be found. This option includes "
-                "a return to home (G28/G30) in the set that marks the ending sequence."
-                "<p>You should select this option if you find that there is a G28 or "
-                "G30 at the end of each operation of a G-code file.")
             inputGroup.isExpanded = docSettings["groupPersonal"]
 
             # Advanced -- retry settings
@@ -548,6 +565,8 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
             if input.id == "splitSetup":
                 inputs.itemById("toolChange").isEnabled = input.value
                 inputs.itemById("toolLabel").isEnabled = input.value
+                inputs.itemById("endCodes").isEnabled = input.value
+                inputs.itemById("endLabel").isEnabled = input.value
                 inputs.itemById("fastZ").isEnabled = input.value
 
         except:
@@ -816,10 +835,12 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         # Split setup into individual operations
         path = setupFolder + "/" + fname
         fileExt = docSettings["fileExt"]
+        opPath = opFolder + "/" + opName + fileExt
         pathlib.Path(setupFolder).mkdir(parents=True, exist_ok=True)
         fileHead = open(path + fileExt, "w")
         fileBody = open(opFolder + "/" + constBodyTmpFile + fileExt, "w")
         fFirst = True
+        fBlankOk = False
         lineNum = 10
         regToolComment = re.compile(r"\(T[0-9]+\s")
         fFastZenabled = docSettings["fastZ"]
@@ -827,6 +848,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             "(?P<N>N[0-9]+ *)?" # line number
             "(?P<line>"         # line w/o number
             "(M(?P<M>[0-9]+) *)?" # M-code
+            "(G(?P<G>[0-9]+) *)?" # G-code
             "(T(?P<T>[0-9]+))?" # Tool
             ".+)",              # to end of line
             re.IGNORECASE | re.DOTALL)
@@ -841,6 +863,17 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 toolChange = match["line"]
                 # split into individual lines to add line numbers
                 toolChange = toolChange.splitlines(True)
+        # Parse end code list, splitting into G-codes and M-codes
+        endCodes = docSettings["endCodes"]
+        endGcodes = re.findall("G([0-9]+)", endCodes)
+        endGcodeSet = set()
+        for code in endGcodes:
+            endGcodeSet.add(int(code))
+        endMcodes = re.findall("M([0-9]+)", endCodes)
+        endMcodeSet = set()
+        for code in endMcodes:
+            endMcodeSet.add(int(code))
+
         if fFastZenabled:
             regGcode = re.compile(r""
                 "(G(?P<G>[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
@@ -881,7 +914,6 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 opList.add(op)
                 i += 1
 
-            opPath = opFolder + "/" + opName + fileExt
             retries = docSettings["postRetries"]
             delay = docSettings["initialDelay"]
             while True:
@@ -938,7 +970,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             # The tail is stripped until the last operation is done.
 
             # Space between operations
-            if not fFirst:
+            if not fFirst and fBlankOk:
                 fileBody.write("\n")
 
             # % at start only
@@ -951,6 +983,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             # check for initial comments and tool
             # send it to header
             while line[0] == "(" or line[0] == "O" or line[0] == "\n":
+                if line[0] == "\n":
+                    fBlankOk = True
                 if regToolComment.match(line) != None:
                     fileHead.write(line)
                     line = fileOp.readline()
@@ -969,7 +1003,6 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 line = fileOp.readline()
 
             # Body starts at tool code, T
-            # Grab preceding comment if present
             fBody = False
             while True:
                 match = regBody.match(line).groupdict();
@@ -1006,6 +1039,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 line = fileOp.readline()
                 if len(line) == 0:
                     return "Tool change G-code (Txx) not found; this post processor is not compatible with Post Process All."
+                if line[0] == "\n":
+                    fBlankOk = True
 
             # We're done with the head, move on to the body
             # Initialize rapid move optimizations
@@ -1021,19 +1056,21 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             # Note that match, line, and fNum are already set
             while True:
                 # End of program marker?
-                Mtmp = match["M"]
-                if Mtmp != None:
-                    Mtmp = int(Mtmp)
-                    if Mtmp in constEndMcodeSet:
+                endMark = match["M"]
+                if endMark != None:
+                    endMark = int(endMark)
+                    if endMark in endMcodeSet:
                         break
                     # When M49/M48 is used to turn off speed changes, disable fast moves as well
-                    if Mtmp == 49:
+                    if endMark == 49:
                         fLockSpeed = True
-                    elif Mtmp == 48:
+                    elif endMark == 48:
                         fLockSpeed = False
-
-                if docSettings["homeEndsOp"] and ("G28" in line or "G30" in line):
-                    break
+                endMark = match["G"]
+                if endMark != None:
+                    endMark = int(endMark)
+                    if endMark in endGcodeSet:
+                        break
 
                 if fFastZ:
                     # Analyze code for chances to make rapid moves
