@@ -913,8 +913,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 "(F(?P<F>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?",
                 re.IGNORECASE)
 
-        i = 0;
-        ops = setup.allOperations;
+        i = 0
+        ops = setup.allOperations
         while i < ops.count:
             op = ops[i]
             i += 1
@@ -954,6 +954,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                             retVal += ": " +  opHasTool.name
                         return retVal
                 except Exception as exc:
+                    if (opHasTool != None):
+                        retVal += " in operation " +  opHasTool.name
                     retVal += ": " + str(exc)
                     return retVal
 
@@ -1019,7 +1021,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 if regToolComment.match(line) != None:
                     fileHead.write(line)
                     line = fileOp.readline()
-                    break;
+                    break
 
                 if fFirst:
                     pos = line.upper().find(opName.upper())
@@ -1036,7 +1038,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             # Body starts at tool code, T
             fBody = False
             while True:
-                match = regBody.match(line).groupdict();
+                match = regBody.match(line).groupdict()
                 line = match["line"]        # filter off line number if present
                 fNum = match["N"] != None
                 if (fBody):
