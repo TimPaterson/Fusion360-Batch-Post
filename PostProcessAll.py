@@ -905,13 +905,14 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             endMcodeSet.add(int(code))
 
         if fFastZenabled:
-            regGcode = re.compile(r""
+            regParseLine = re.compile(r""
                 "(G(?P<G>[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
                 "(?P<XY>((X-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
                 "((Y-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?)"
                 "(Z(?P<Z>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
                 "(F(?P<F>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?",
                 re.IGNORECASE)
+            regGcodes = re.compile(r"G([0-9]+(?:\.[0-9]*)?)")
 
         i = 0
         ops = setup.allOperations
@@ -1083,7 +1084,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             Zfeed = None
             fZfeedNotSet = True
             feedCur = 0
-            fFirstG1 = False
+            fNeedFeed = False
             fLockSpeed = False
 
             # Note that match, line, and fNum are already set
@@ -1107,17 +1108,20 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
                 if fFastZ:
                     # Analyze code for chances to make rapid moves
-                    match = regGcode.match(line)
+                    match = regParseLine.match(line)
                     if match.end() != 0:
                         try:
                             match = match.groupdict()
-                            GcodeTmp = match["G"]
-                            if GcodeTmp != None:
+                            Gcodes = regGcodes.findall(line)
+                            fNoMotionGcode = True
+                            for GcodeTmp in Gcodes:
                                 GcodeTmp = int(float(GcodeTmp))
                                 if GcodeTmp in constMotionGcodeSet:
+                                    fNoMotionGcode = False;
                                     Gcode = GcodeTmp
-                                    if Gcode != 1:
-                                        fFirstG1 = False
+                                    if Gcode == 0:
+                                        fNeedFeed = False
+                                    break;
 
                             Ztmp = match["Z"]
                             if Ztmp != None:
@@ -1138,7 +1142,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                                 if Gcode != 0:
                                     # Replace line with rapid move
                                     line = constRapidZgcode.format(Zcur, line[:-1])
-                                    fFirstG1 = True
+                                    fNeedFeed = True
                                     Gcode = 0
 
                             if Gcode == 1 and not fLockSpeed:
@@ -1147,40 +1151,40 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                                         # Upward move, above feed height, or anomalous feed rate.
                                         # Replace with rapid move
                                         line = constRapidZgcode.format(Zcur, line[:-1])
-                                        fFirstG1 = True
+                                        fNeedFeed = True
                                         Gcode = 0
 
                                 elif Zcur >= Zfeed:
                                     # No Z move, at/above feed height
                                     line = constRapidXYgcode.format(XYcur, line[:-1])
-                                    fFirstG1 = True
+                                    fNeedFeed = True
                                     Gcode = 0
 
-                            elif fFirstG1 and GcodeTmp == None:
+                            elif fNeedFeed and fNoMotionGcode:
                                 # No G-code present, changing to G1
                                 if Ztmp != None:
                                     if len(XYcur) != 0:
                                         # Not Z move only - back to G1
                                         line = constFeedXYZgcode.format(XYcur, Zcur, feedCur, line[:-1])
-                                        fFirstG1 = False
+                                        fNeedFeed = False
                                         Gcode = 1
                                     elif Zcur < Zfeed and Zcur <= Zlast:
                                         # Not up nor above feed height - back to G1
                                         line = constFeedZgcode.format(Zcur, feedCur, line[:-1])
-                                        fFirstG1 = False
+                                        fNeedFeed = False
                                         Gcode = 1
                                         
                                 elif len(XYcur) != 0 and Zcur < Zfeed:
                                     # No Z move, below feed height - back to G1
                                     line = constFeedXYgcode.format(XYcur, feedCur, line[:-1])
-                                    fFirstG1 = False
+                                    fNeedFeed = False
                                     Gcode = 1
 
-                            if (Gcode == 1 and fFirstG1):
+                            if (Gcode != 0 and fNeedFeed):
                                 if (feedTmp == None):
                                     # Feed rate not present, add it
                                     line = line[:-1] + constAddFeedGcode.format(feedCur)
-                                fFirstG1 = False
+                                fNeedFeed = False
 
                             if Zcur != None and Zfeed != None and Zcur > Zfeed and Gcode != None and \
                                 Gcode != 0 and len(XYcur) != 0 and (Ztmp != None or Gcode != 1):
