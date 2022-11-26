@@ -54,6 +54,7 @@ constFeedXYgcode = 'G01 {} F{} (Changed from: "{}")\n'
 constFeedXYZgcode = 'G01 {} Z{} F{} (Changed from: "{}")\n'
 constAddFeedGcode = " F{} (Feed rate added)\n"
 constMotionGcodeSet = {0,1,2,3,33,38,73,76,80,81,82,84,85,86,87,88,89}
+constHomeGcodeSet = {28, 30}
 constLineNumInc = 5
 
 # Tool tip text
@@ -117,8 +118,8 @@ class SettingsManager:
                 file = open(self.GetPath())
                 self.default = json.load(file)
                 # never allow delFiles or delFolder to default to True
-                self.default["delFiles"] = False;
-                self.default["delFolder"] = False;
+                self.default["delFiles"] = False
+                self.default["delFolder"] = False
                 if self.default["version"] != version:
                     self.UpdateSettings(defaultSettings, self.default)
             except Exception:
@@ -138,8 +139,8 @@ class SettingsManager:
         self.fMustSave = False
         self.default = dict(docSettings)
         # never allow delFiles or delFolder to default to True
-        self.default["delFiles"] = False;
-        self.default["delFolder"] = False;
+        self.default["delFiles"] = False
+        self.default["delFolder"] = False
         try:
             strSettings = json.dumps(docSettings)
             file = open(self.GetPath(), "w")
@@ -213,7 +214,7 @@ def CountOutputFolderFiles(folder, limit, fileExt):
         if cntFiles > limit:
             return "many files that are not G-code"
         if cntNcFiles > limit * 1.5:
-            return "many more G-code files than are produced by this design";
+            return "many more G-code files than are produced by this design"
     return None
 
 
@@ -345,7 +346,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             input.listItems.add('Document units', True)
             input.listItems.add('Inches', False)
             input.listItems.add('Milimeters', False)
-            input.listItems.item(docSettings["units"]).isSelected = True;
+            input.listItems.item(docSettings["units"]).isSelected = True
             input.isFullWidth = True
             input.tooltip = "Post Output Units"
             input.tooltipDescription = (
@@ -694,8 +695,8 @@ def PerformPostProcess(docSettings, setups):
             progress = ui.createProgressDialog()
             progress.isCancelButtonShown = True
             progress.show("Generating toolpaths...", "Beginning toolpath generation", 0, 1)
-            progress.progressValue = 1; # try to get it to display
-            progress.progressValue = 0;
+            progress.progressValue = 1 # try to get it to display
+            progress.progressValue = 0
 
             if len(setups) != 0 and cam.allOperations.count != 0:
                 # make sure we're not going to delete too much
@@ -720,8 +721,8 @@ def PerformPostProcess(docSettings, setups):
                 # generate toolpaths with progess dialog
                 genStat = cam.generateAllToolpaths(True)
                 if not genStat.isGenerationCompleted:
-                    progress.maximumValue = genStat.numberOfOperations;
-                    progress.message = "Generating toolpath %v of %m";
+                    progress.maximumValue = genStat.numberOfOperations
+                    progress.message = "Generating toolpath %v of %m"
                     while not genStat.isGenerationCompleted:
                         if progress.wasCancelled:
                             return  #abort!
@@ -744,13 +745,15 @@ def PerformPostProcess(docSettings, setups):
 
                 progressMsg = "{} files written to " + outputFolder
                 progress.show("Post Processing...", "", 0, len(setups))
-                progress.progressValue = 1; # try to get it to display
-                progress.progressValue = 0;
+                progress.progressValue = 1 # try to get it to display
+                progress.progressValue = 0
 
                 cntSetups = 0
                 seqDict = dict()
 
-                for setup in setups:
+                # We pass through all setups even if only some are selected
+                # so numbering scheme doesn't change.
+                for setup in cam.setups:
                     if progress.wasCancelled:
                         break
                     if not setup.isSuppressed and setup.allOperations.count != 0:
@@ -765,9 +768,16 @@ def PerformPostProcess(docSettings, setups):
                         # keep a separate sequence number for each folder
                         if setupFolder in seqDict:
                             seqDict[setupFolder] += 1
+                            # skip if we're not actually including this setup
+                            if setup not in setups:
+                                continue
                         else:
-                            seqDict[setupFolder] = 1
                             # first file for this folder
+                            seqDict[setupFolder] = 1
+                            # skip if we're not actually including this setup
+                            if setup not in setups:
+                                continue
+
                             if (docSettings["delFiles"]):
                                 # delete all the files in the folder
                                 try:
@@ -941,7 +951,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                         opList.add(op)
                         opHasTool = op
                         i += 1
-                    break;
+                    break
                 opList.add(op)
                 i += 1
 
@@ -968,7 +978,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                     delay *= 2
                     retries -= 1
                     if retries > 0:
-                        continue;
+                        continue
                     # Maybe the file name extension is wrong
                     for file in os.listdir(opFolder):
                         if file.startswith(opName):
@@ -979,7 +989,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                                     "of '{}'. Make sure you have the correct file "
                                     "extension set in the Post Process All "
                                     "dialog.".format(ext, fileExt))
-                            break;
+                            break
                     return "Unable to open " + opPath
             
             # Parse the gcode. We expect a header like this:
@@ -1114,83 +1124,89 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                             match = match.groupdict()
                             Gcodes = regGcodes.findall(line)
                             fNoMotionGcode = True
+                            fHomeGcode = False
                             for GcodeTmp in Gcodes:
                                 GcodeTmp = int(float(GcodeTmp))
+                                if GcodeTmp in constHomeGcodeSet:
+                                    fHomeGcode = True
+                                    break
+
                                 if GcodeTmp in constMotionGcodeSet:
-                                    fNoMotionGcode = False;
+                                    fNoMotionGcode = False
                                     Gcode = GcodeTmp
                                     if Gcode == 0:
                                         fNeedFeed = False
-                                    break;
+                                    break
 
-                            Ztmp = match["Z"]
-                            if Ztmp != None:
-                                Zlast = Zcur
-                                Zcur = float(Ztmp)
-
-                            feedTmp = match["F"]
-                            if feedTmp != None:
-                                feedCur = float(feedTmp)
-
-                            XYcur = match["XY"].rstrip("\n ")
-
-                            if (Zfeed == None or fZfeedNotSet) and (Gcode == 0 or Gcode == 1) and Ztmp != None and len(XYcur) == 0:
-                                # Figure out Z feed
-                                if (Zfeed != None):
-                                    fZfeedNotSet = False
-                                Zfeed = Zcur
-                                if Gcode != 0:
-                                    # Replace line with rapid move
-                                    line = constRapidZgcode.format(Zcur, line[:-1])
-                                    fNeedFeed = True
-                                    Gcode = 0
-
-                            if Gcode == 1 and not fLockSpeed:
+                            if not fHomeGcode:
+                                Ztmp = match["Z"]
                                 if Ztmp != None:
-                                    if len(XYcur) == 0 and (Zcur >= Zlast or Zcur >= Zfeed or feedCur == 0):
-                                        # Upward move, above feed height, or anomalous feed rate.
-                                        # Replace with rapid move
+                                    Zlast = Zcur
+                                    Zcur = float(Ztmp)
+
+                                feedTmp = match["F"]
+                                if feedTmp != None:
+                                    feedCur = float(feedTmp)
+
+                                XYcur = match["XY"].rstrip("\n ")
+
+                                if (Zfeed == None or fZfeedNotSet) and (Gcode == 0 or Gcode == 1) and Ztmp != None and len(XYcur) == 0:
+                                    # Figure out Z feed
+                                    if (Zfeed != None):
+                                        fZfeedNotSet = False
+                                    Zfeed = Zcur
+                                    if Gcode != 0:
+                                        # Replace line with rapid move
                                         line = constRapidZgcode.format(Zcur, line[:-1])
                                         fNeedFeed = True
                                         Gcode = 0
 
-                                elif Zcur >= Zfeed:
-                                    # No Z move, at/above feed height
-                                    line = constRapidXYgcode.format(XYcur, line[:-1])
-                                    fNeedFeed = True
-                                    Gcode = 0
+                                if Gcode == 1 and not fLockSpeed:
+                                    if Ztmp != None:
+                                        if len(XYcur) == 0 and (Zcur >= Zlast or Zcur >= Zfeed or feedCur == 0):
+                                            # Upward move, above feed height, or anomalous feed rate.
+                                            # Replace with rapid move
+                                            line = constRapidZgcode.format(Zcur, line[:-1])
+                                            fNeedFeed = True
+                                            Gcode = 0
 
-                            elif fNeedFeed and fNoMotionGcode:
-                                # No G-code present, changing to G1
-                                if Ztmp != None:
-                                    if len(XYcur) != 0:
-                                        # Not Z move only - back to G1
-                                        line = constFeedXYZgcode.format(XYcur, Zcur, feedCur, line[:-1])
+                                    elif Zcur >= Zfeed:
+                                        # No Z move, at/above feed height
+                                        line = constRapidXYgcode.format(XYcur, line[:-1])
+                                        fNeedFeed = True
+                                        Gcode = 0
+
+                                elif fNeedFeed and fNoMotionGcode:
+                                    # No G-code present, changing to G1
+                                    if Ztmp != None:
+                                        if len(XYcur) != 0:
+                                            # Not Z move only - back to G1
+                                            line = constFeedXYZgcode.format(XYcur, Zcur, feedCur, line[:-1])
+                                            fNeedFeed = False
+                                            Gcode = 1
+                                        elif Zcur < Zfeed and Zcur <= Zlast:
+                                            # Not up nor above feed height - back to G1
+                                            line = constFeedZgcode.format(Zcur, feedCur, line[:-1])
+                                            fNeedFeed = False
+                                            Gcode = 1
+                                            
+                                    elif len(XYcur) != 0 and Zcur < Zfeed:
+                                        # No Z move, below feed height - back to G1
+                                        line = constFeedXYgcode.format(XYcur, feedCur, line[:-1])
                                         fNeedFeed = False
                                         Gcode = 1
-                                    elif Zcur < Zfeed and Zcur <= Zlast:
-                                        # Not up nor above feed height - back to G1
-                                        line = constFeedZgcode.format(Zcur, feedCur, line[:-1])
-                                        fNeedFeed = False
-                                        Gcode = 1
-                                        
-                                elif len(XYcur) != 0 and Zcur < Zfeed:
-                                    # No Z move, below feed height - back to G1
-                                    line = constFeedXYgcode.format(XYcur, feedCur, line[:-1])
+
+                                if (Gcode != 0 and fNeedFeed):
+                                    if (feedTmp == None):
+                                        # Feed rate not present, add it
+                                        line = line[:-1] + constAddFeedGcode.format(feedCur)
                                     fNeedFeed = False
-                                    Gcode = 1
 
-                            if (Gcode != 0 and fNeedFeed):
-                                if (feedTmp == None):
-                                    # Feed rate not present, add it
-                                    line = line[:-1] + constAddFeedGcode.format(feedCur)
-                                fNeedFeed = False
-
-                            if Zcur != None and Zfeed != None and Zcur > Zfeed and Gcode != None and \
-                                Gcode != 0 and len(XYcur) != 0 and (Ztmp != None or Gcode != 1):
-                                # We're above the feed height, but made a cutting move.
-                                # Feed height is wrong, bring it up
-                                Zfeed = Zcur + 0.001
+                                if Zcur != None and Zfeed != None and Zcur > Zfeed and Gcode != None and \
+                                    Gcode != 0 and len(XYcur) != 0 and (Ztmp != None or Gcode != 1):
+                                    # We're above the feed height, but made a cutting move.
+                                    # Feed height is wrong, bring it up
+                                    Zfeed = Zcur + 0.001
                         except:
                             fFastZ = False # Just skip changes
 
@@ -1217,7 +1233,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         # Completed all operations, add tail
         # Update line numbers if present
         if len(tailGcode) != 0:
-            tailGcode = tailGcode.splitlines(True);
+            tailGcode = tailGcode.splitlines(True)
             for code in tailGcode:
                 match = regBody.match(code).groupdict()
                 if match["N"] != None:
