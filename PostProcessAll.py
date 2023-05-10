@@ -1202,9 +1202,9 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                                         line = line[:-1] + constAddFeedGcode.format(feedCur)
                                     fNeedFeed = False
 
-                                if Zcur != None and Zfeed != None and Zcur > Zfeed and Gcode != None and \
+                                if Zcur != None and Zfeed != None and Zcur >= Zfeed and Gcode != None and \
                                     Gcode != 0 and len(XYcur) != 0 and (Ztmp != None or Gcode != 1):
-                                    # We're above the feed height, but made a cutting move.
+                                    # We're at or above the feed height, but made a cutting move.
                                     # Feed height is wrong, bring it up
                                     Zfeed = Zcur + 0.001
                         except:
