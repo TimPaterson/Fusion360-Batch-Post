@@ -61,7 +61,7 @@ constLineNumInc = 5
 toolTip = (
     "Post process all setups into G-code for your machine.\n\n"
     "The name of the setup is used for the name of the output "
-    "file adding the .nc extension. A colon (':') in the name indicates "
+    "file adding the appropriate extension. A colon (':') in the name indicates "
     "the preceding portion is the name of a subfolder. Multiple "
     "colons can be used to nest subfolders. Spaces around colons "
     "are removed.\n\n"
@@ -365,7 +365,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             input.tooltip = "Split Setup Into Individual Operations"
             input.tooltipDescription = (
                 "Generate output for each operation individually. This is usually "
-                "REQUIRED when using Fusion 360 for Personal Use, because tool "
+                "REQUIRED when using Fusion for Personal Use, because tool "
                 "changes are not allowed. The individual operations will be "
                 "grouped back together into the same file, eliminating this "
                 "limitation. You will get an error if there is a tool change "
@@ -437,7 +437,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             input.tooltip = "Restore Rapid Moves (Experimental)"
             input.tooltipDescription = (
                 "Replace appropriate moves at feed rate with rapid (G0) moves. "
-                "In Fusion 360 for Personal Use, moves that could be rapid are "
+                "In Fusion for Personal Use, moves that could be rapid are "
                 "now limited to the current feed rate. When this option is selected, "
                 "the G-code will be analyzed to find moves at or above the feed "
                 "height and replace them with rapid moves."
@@ -692,15 +692,13 @@ def PerformPostProcess(docSettings, setups):
                 # move all setups into a list
                 for setup in cam.setups:
                     setups.append(setup)
-            progress = ui.createProgressDialog()
-            progress.isCancelButtonShown = True
-            progress.show("Generating toolpaths...", "Beginning toolpath generation", 0, 1)
-            progress.progressValue = 1 # try to get it to display
-            progress.progressValue = 0
 
             if len(setups) != 0 and cam.allOperations.count != 0:
                 # make sure we're not going to delete too much
                 outputFolder = docSettings["output"]
+                if not docSettings["delFiles"]:
+                    docSettings["delFolder"] = False
+
                 if docSettings["delFolder"]:
                     strMsg = CountOutputFolderFiles(outputFolder, len(setups), docSettings["fileExt"])
                     if strMsg:
@@ -718,31 +716,14 @@ def PerformPostProcess(docSettings, setups):
                         if res == adsk.core.DialogResults.DialogCancel:
                             return  # abort!
 
-                # generate toolpaths with progess dialog
-                genStat = cam.generateAllToolpaths(True)
-                if not genStat.isGenerationCompleted:
-                    progress.maximumValue = genStat.numberOfOperations
-                    progress.message = "Generating toolpath %v of %m"
-                    while not genStat.isGenerationCompleted:
-                        if progress.wasCancelled:
-                            return  #abort!
-                        progress.progressValue = genStat.numberOfCompleted
-                        time.sleep(.1)
-
-                if False and not cam.checkAllToolpaths():   # checkAllToolpaths() always throws exception
-                    res = ui.messageBox("Some toolpaths are not valid. If you continue, affected Setups will be skipped", 
-                                        constCmdName,
-                                        adsk.core.MessageBoxButtonTypes.OKCancelButtonType,
-                                        adsk.core.MessageBoxIconTypes.WarningIconType)
-                    if res == adsk.core.DialogResults.DialogCancel:
-                        return  # abort!
-                
                 if docSettings["delFolder"]:
                     try:
                         shutil.rmtree(outputFolder, True)
                     except:
                         pass #ignore errors
 
+                progress = ui.createProgressDialog()
+                progress.isCancelButtonShown = True
                 progressMsg = "{} files written to " + outputFolder
                 progress.show("Post Processing...", "", 0, len(setups))
                 progress.progressValue = 1 # try to get it to display
@@ -840,7 +821,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
     fileHead = None
     fileBody = None
     fileOp = None
-    retVal = "Fusion 360 reported an exception"
+    retVal = "Fusion reported an exception"
 
     try:
         app = adsk.core.Application.get()
@@ -848,6 +829,21 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         doc = app.activeDocument
         product = doc.products.itemByProductType(constCAMProductId)
         cam = adsk.cam.CAM.cast(product)
+
+        # Verify file name is valid by creating it now
+        fileExt = docSettings["fileExt"]
+        path = setupFolder + "/" + fname + fileExt
+        try:
+            pathlib.Path(setupFolder).mkdir(parents=True, exist_ok=True)
+            fileHead = open(path, "w")
+        except Exception as exc:
+            return "Unable to create output file '" + path + "'. Make sure the setup name is valid as a file name."
+        
+        # Make sure toolpaths are valid
+        if not cam.checkToolpath(setup):
+            genStat = cam.generateToolpath(setup)
+            while not genStat.isGenerationCompleted:
+                time.sleep(.1)
 
         # Create PostProcessInput
         opName = fname
@@ -863,9 +859,10 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
         # Do it all at once?
         if not docSettings["splitSetup"]:
+            fileHead.close();
             try:
                 if not cam.postProcess(setup, postInput):
-                    return "Fusion 360 reported an error."
+                    return "Fusion reported an error."
                 time.sleep(constPostLoopDelay) # files missing sometimes unless we slow down (??)
                 return None
             except Exception as exc:
@@ -873,11 +870,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 return retVal
 
         # Split setup into individual operations
-        path = setupFolder + "/" + fname
-        fileExt = docSettings["fileExt"]
         opPath = opFolder + "/" + opName + fileExt
-        pathlib.Path(setupFolder).mkdir(parents=True, exist_ok=True)
-        fileHead = open(path + fileExt, "w")
         fileBody = open(opFolder + "/" + constBodyTmpFile + fileExt, "w")
         fFirst = True
         fBlankOk = False
@@ -960,7 +953,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             while True:
                 try:
                     if not cam.postProcess(opList, postInput):
-                        retVal = "Fusion 360 reported an error processing operation"
+                        retVal = "Fusion reported an error processing operation"
                         if (opHasTool != None):
                             retVal += ": " +  opHasTool.name
                         return retVal
@@ -984,7 +977,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                         if file.startswith(opName):
                             ext = file[len(opName):]
                             if ext != fileExt:
-                                ui.messageBox("Unable to open output file. "
+                                return ("Unable to open output file. "
                                     "Found the file with extension '{}' instead "
                                     "of '{}'. Make sure you have the correct file "
                                     "extension set in the Post Process All "
