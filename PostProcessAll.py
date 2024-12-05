@@ -548,7 +548,7 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                 dialog = ui.createFileDialog()
                 post = self.docSettings["post"]
                 if len(post) != 0:
-                    dialog.initialFilename = post
+                    dialog.initialDirectory = os.path.dirname(post)
                 else:
                     dialog.initialDirectory = product.genericPostFolder
 
@@ -850,7 +850,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         opFolder = setupFolder
         if docSettings["splitSetup"]:
             opName = constOpTmpFile
-            opFolder = tempfile.gettempdir()
+            opFolder = tempfile.gettempdir()    # e.g., C:\Users\Tim\AppData\Local\Temp
         postInput = adsk.cam.PostProcessInput.create(opName, 
                                                     docSettings["post"], 
                                                     opFolder, 
