@@ -218,6 +218,19 @@ def CountOutputFolderFiles(folder, limit, fileExt):
     return None
 
 
+def ExpandFileName(file):
+    return os.path.expanduser(file)
+
+
+def CompressFileName(file):
+    # normalize whacks 
+    base = os.path.expanduser("~").replace("\\", "/")
+    newFile = file.replace("\\", "/").removeprefix(base)
+    if len(file) != len(newFile) and newFile[0] == "/":
+        file = "~" + newFile
+    return file
+
+
 # Event handler for the commandCreated event.
 class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
     def __init__(self):
@@ -548,23 +561,25 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                 dialog = ui.createFileDialog()
                 post = self.docSettings["post"]
                 if len(post) != 0:
-                    dialog.initialDirectory = os.path.dirname(post)
+                    dialog.initialDirectory = ExpandFileName(os.path.dirname(post))
                 else:
                     dialog.initialDirectory = product.genericPostFolder
 
                 dialog.filter = "post processors (*.cps);;All files (*.*)"
                 dialog.title = "Select post processor"
                 if dialog.showOpen() == adsk.core.DialogResults.DialogOK:
-                    self.docSettings["post"] = dialog.filename
-                    inputs.itemById("post").value = dialog.filename
+                    filename = CompressFileName(dialog.filename)
+                    self.docSettings["post"] = filename
+                    inputs.itemById("post").value = filename
 
             elif input.id == "browseOutput":
                 dialog = ui.createFolderDialog()
-                dialog.initialDirectory = self.docSettings["output"]
+                dialog.initialDirectory = ExpandFileName(self.docSettings["output"])
                 dialog.title = "Select output folder"
                 if dialog.showDialog() == adsk.core.DialogResults.DialogOK:
-                    self.docSettings["output"] = dialog.folder
-                    inputs.itemById("output").value = dialog.folder
+                    folder = CompressFileName(dialog.folder)
+                    self.docSettings["output"] = folder
+                    inputs.itemById("output").value = folder
 
             elif input.id == "units":
                 self.docSettings[input.id] = input.selectedItem.index
@@ -610,7 +625,7 @@ class CommandValidateInputsHandler(adsk.core.ValidateInputsEventHandler):
             inputs = eventArgs.firingEvent.sender.commandInputs
 
             fIsOutputValid = len(inputs.itemById("output").value) != 0
-            post = inputs.itemById("post").value
+            post = ExpandFileName(inputs.itemById("post").value)
             fIsPostValid = post.endswith(".cps") and os.path.isfile(post)
             eventArgs.areInputsValid = fIsOutputValid and fIsPostValid
             error = inputs.itemById("error")
@@ -695,7 +710,7 @@ def PerformPostProcess(docSettings, setups):
 
             if len(setups) != 0 and cam.allOperations.count != 0:
                 # make sure we're not going to delete too much
-                outputFolder = docSettings["output"]
+                outputFolder = ExpandFileName(docSettings["output"])
                 if not docSettings["delFiles"]:
                     docSettings["delFolder"] = False
 
@@ -852,7 +867,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             opName = constOpTmpFile
             opFolder = tempfile.gettempdir()    # e.g., C:\Users\Tim\AppData\Local\Temp
         postInput = adsk.cam.PostProcessInput.create(opName, 
-                                                    docSettings["post"], 
+                                                    ExpandFileName(docSettings["post"]), 
                                                     opFolder, 
                                                     docSettings["units"])
         postInput.isOpenInEditor = False
@@ -878,12 +893,12 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         regToolComment = re.compile(r"\(T[0-9]+\s")
         fFastZenabled = docSettings["fastZ"]
         regBody = re.compile(r""
-            "(?P<N>N[0-9]+ *)?" # line number
-            "(?P<line>"         # line w/o number
-            "(M(?P<M>[0-9]+) *)?" # M-code
-            "(G(?P<G>[0-9]+) *)?" # G-code
-            "(T(?P<T>[0-9]+))?" # Tool
-            ".+)",              # to end of line
+            r"(?P<N>N[0-9]+ *)?" # line number
+            r"(?P<line>"         # line w/o number
+            r"(M(?P<M>[0-9]+) *)?" # M-code
+            r"(G(?P<G>[0-9]+) *)?" # G-code
+            r"(T(?P<T>[0-9]+))?" # Tool
+            r".+)",              # to end of line
             re.IGNORECASE | re.DOTALL)
         toolChange = docSettings["toolChange"]
         fToolChangeNum = False
@@ -909,11 +924,11 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
 
         if fFastZenabled:
             regParseLine = re.compile(r""
-                "(G(?P<G>[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
-                "(?P<XY>((X-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
-                "((Y-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?)"
-                "(Z(?P<Z>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
-                "(F(?P<F>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?",
+                r"(G(?P<G>[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                r"(?P<XY>((X-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                r"((Y-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?)"
+                r"(Z(?P<Z>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                r"(F(?P<F>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?",
                 re.IGNORECASE)
             regGcodes = re.compile(r"G([0-9]+(?:\.[0-9]*)?)")
 
