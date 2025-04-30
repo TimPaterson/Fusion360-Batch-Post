@@ -898,6 +898,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             r"(M(?P<M>[0-9]+) *)?" # M-code
             r"(G(?P<G>[0-9]+) *)?" # G-code
             r"(T(?P<T>[0-9]+))?" # Tool
+            r"(\([A-Z ]+ T(?P<T2>[0-9]+)\))?" # Manual tool change comment
             r".+)",              # to end of line
             re.IGNORECASE | re.DOTALL)
         toolChange = docSettings["toolChange"]
@@ -1013,6 +1014,10 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             #
             # Txx ...   (optionally preceded by line number Nxx)
             #
+            # Or a localized message like:
+            #
+            # (MANUAL TOOL CHANGE TO Txx)
+            #
             # We copy all the body, looking for the tail. The start
             # of the tail is denoted by any of a list of G-codes
             # entered by the user. The defaults are:
@@ -1062,7 +1067,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                 fNum = match["N"] != None
                 if (fBody):
                     break
-                toolCur = match["T"]
+                toolCur = match["T"] or match["T2"]
                 if (toolCur != None):
                     toolCur = int(toolCur)
                     if not fFirst:
