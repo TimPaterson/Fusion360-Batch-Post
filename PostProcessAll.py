@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 8
+version = 9
 
 # Initial default values of settings
 defaultSettings = {
@@ -29,6 +29,7 @@ defaultSettings = {
     "groupPersonal" : True,
     "groupPost" : True,
     "groupAdvanced" : False,
+    "groupRename" : False,
     # Retry policy
     "initialDelay" : 0.2,
     "postRetries" : 3
@@ -90,6 +91,26 @@ def run(context):
     except:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+
+
+def stop(context):
+    ui = None
+    try:
+        app = adsk.core.Application.get()
+        ui  = app.userInterface
+
+        # Clean up the UI.
+        cmdDef = ui.commandDefinitions.itemById(constCmdDefId)
+        if cmdDef:
+            cmdDef.deleteMe()
+            
+        addinsPanel = ui.allToolbarPanels.itemById(constCAMActionsPanelId)
+        cmdControl = addinsPanel.controls.itemById(constCmdDefId)
+        if cmdControl:
+            cmdControl.deleteMe()
+    except:
+        if ui:
+            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))	
 
 
 class SettingsManager:
@@ -229,6 +250,42 @@ def CompressFileName(file):
     if len(file) != len(newFile) and newFile[0] == "/":
         file = "~" + newFile
     return file
+
+
+def GetSetups(cam, settings, setups):
+    if len(setups) == 0 or not settings["onlySelected"]:
+        setups = list()
+        # move all setups into a list
+        for setup in cam.setups:
+            setups.append(setup)
+    return setups
+
+
+def RenameSetups(settings, setups, find, replace):
+    try:
+        app = adsk.core.Application.get()
+        ui  = app.userInterface
+        doc = app.activeDocument
+        product = doc.products.itemByProductType(constCAMProductId)
+
+        if product != None:
+            cam = adsk.cam.CAM.cast(product)
+            setups = GetSetups(cam, settings, setups)
+            for setup in setups:
+                if find == "":
+                    # special case, prepend
+                    newName = replace + setup.name
+                else:
+                    newName = setup.name.replace(find, replace)
+
+                if setup.name != newName:
+                    setup.name = newName
+
+            # Save settings in document attributes
+            settingsMgr.SaveSettings(doc.attributes, settings)
+
+    except:
+        pass
 
 
 # Event handler for the commandCreated event.
@@ -460,6 +517,58 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
            
             inputGroup.isExpanded = docSettings["groupPersonal"]
 
+            # Rename
+            inputGroup = inputs.addGroupCommandInput("groupRename", "Rename Setups")
+
+            # text box as a label for search field
+            input = inputGroup.children.addTextBoxCommandInput("searchLabel", 
+                                                               "", 
+                                                               "Search for this string:",
+                                                               1,
+                                                               True)
+            input.isFullWidth = True
+            label = input
+
+            # Find
+            input = inputGroup.children.addStringValueInput("findString", "")
+            input.isFullWidth = True
+            input.tooltip = "String to find in setup name"
+            input.tooltipDescription = (
+                "Replace all occurences of this string with the replacement string. "
+                "If this is left blank, the replacement string will be prepended to "
+                "each setup name."
+            )
+            label.tooltip = input.tooltip
+            label.tooltipDescription = input.tooltipDescription
+
+            # text box as a label for replace field
+            input = inputGroup.children.addTextBoxCommandInput("replaceLabel", 
+                                                               "", 
+                                                               "Replace with this string:",
+                                                               1,
+                                                               True)
+            input.isFullWidth = True
+            label = input
+
+            # Replace
+            input = inputGroup.children.addStringValueInput("replaceString", "")
+            input.isFullWidth = True
+            input.tooltip = "String to use as replacement"
+            input.tooltipDescription = (
+                "Replace all occurences of the Find string with this string."
+            )
+            label.tooltip = input.tooltip
+            label.tooltipDescription = input.tooltipDescription
+
+            # button to execute search & replace
+            input = inputGroup.children.addBoolValueInput("replace", "Search and replace", False)
+            input.resourceFolder = "resources/Rename"
+            input.tooltip = "Execute search and replace"
+            input.tooltipDescription = (
+                "Search for all strings matching the Find box and replace them "
+                "with the string in the Replace box.")
+            inputGroup.isExpanded = docSettings["groupRename"]
+
             # Advanced -- retry settings
             inputGroup = inputs.addGroupCommandInput("groupAdvanced", "Advanced")
             # Time delay
@@ -519,7 +628,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             input.isVisible = False
 
             # Connect to the inputChanged event.
-            onInputChanged = CommandInputChangedHandler(docSettings)
+            onInputChanged = CommandInputChangedHandler(docSettings, selectedSetups)
             cmd.inputChanged.add(onInputChanged)
             handlers.append(onInputChanged)
 
@@ -538,8 +647,9 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
 
 # Event handler for the inputChanged event.
 class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
-    def __init__(self, docSettings):
+    def __init__(self, docSettings, selectedSetups):
         self.docSettings = docSettings
+        self.selectedSetups = selectedSetups
         super().__init__()
 
     def notify(self, args):
@@ -547,6 +657,7 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
         ui  = app.userInterface
         try:
             eventArgs = adsk.core.InputChangedEventArgs.cast(args)
+            cmd = eventArgs.input.parentCommand
             inputs = eventArgs.inputs
 
             doc = app.activeDocument
@@ -556,7 +667,10 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
             input = eventArgs.input
             if input.id == "save":
                 settingsMgr.SaveDefault(self.docSettings)
-                
+
+            elif input.id == "replace":
+                cmd.doExecute(False)    # do it in execute handler for Undo
+
             elif input.id == "browsePost":
                 dialog = ui.createFileDialog()
                 post = self.docSettings["post"]
@@ -659,29 +773,16 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
 
     def notify(self, args):
         eventArgs = adsk.core.CommandEventArgs.cast(args)
+        cmd = eventArgs.command
+        inputs = cmd.commandInputs
 
         # Code to react to the event.
-        PerformPostProcess(self.docSettings, self.selectedSetups)
-
-
-def stop(context):
-    ui = None
-    try:
-        app = adsk.core.Application.get()
-        ui  = app.userInterface
-
-        # Clean up the UI.
-        cmdDef = ui.commandDefinitions.itemById(constCmdDefId)
-        if cmdDef:
-            cmdDef.deleteMe()
-            
-        addinsPanel = ui.allToolbarPanels.itemById(constCAMActionsPanelId)
-        cmdControl = addinsPanel.controls.itemById(constCmdDefId)
-        if cmdControl:
-            cmdControl.deleteMe()
-    except:
-        if ui:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))	
+        button = inputs.itemById("replace")
+        if button.value:
+            RenameSetups(self.docSettings, self.selectedSetups, inputs.itemById("findString").value, inputs.itemById("replaceString").value)
+            button.value = False
+        else:
+            PerformPostProcess(self.docSettings, self.selectedSetups)
 
 
 def PerformPostProcess(docSettings, setups):
@@ -702,11 +803,7 @@ def PerformPostProcess(docSettings, setups):
 
         if product != None:
             cam = adsk.cam.CAM.cast(product)
-            if len(setups) == 0 or not docSettings["onlySelected"]:
-                setups = list()
-                # move all setups into a list
-                for setup in cam.setups:
-                    setups.append(setup)
+            setups = GetSetups(cam, docSettings, setups)
 
             if len(setups) != 0 and cam.allOperations.count != 0:
                 # make sure we're not going to delete too much

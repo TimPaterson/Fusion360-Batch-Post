@@ -1,10 +1,9 @@
 ## Post Process All: Fusion CAM Batch Post Add-In
-#### NEW! Fixes tool change restriction in Fusion for Personal Use
-Also restores rapid moves the free version of Fusion limits to 
-feed-rate moves. See section below.
+#### NEW! Provides renaming setups using search-and-replace.
 
 ### Introduction
-This add-in for Fusion will post process all CAM setups at once.
+This add-in for Fusion will post process all CAM setups, or any
+selection of setups you choose, at once.
 Each setup is put in a file with the name of the setup. You can
 optionally use a special setup naming convention to put files in
 subfolders. You can also put sequence numbers on the name to maintain
@@ -27,13 +26,14 @@ The first time you run `Post Process All`, the `Output Folder` and `Post Process
 fields will be blank. You must set both of these fields before you can
 click OK. Once `Post Process All` has been run, all settings will be saved in
 the design. New designs will also be given default settings.
+
 ### Subfolders
-You can put the output files in subfolders by using a colon (":") in
+You can put the output files into subfolders by using a colon (":") in
 the name. The part of the name to the left of the colon is the folder
 name; multiple colons result in nested subfolders.
 
 Here is an example of a design with three components. The name of the
-component appears first, then a colon and the name of the setup for
+component appears first, then a colon and the name of a setup for
 that component:
 
 ![Setup Image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/SetupImage.PNG)
@@ -42,6 +42,7 @@ When you run the `Post Process All` command, it will create three
 subfolders in the output folder, named "Cover", "Block", and "Insulator".
 Within these subfolders will be five, three, and five G-code files
 respectively with names like "first long edge", "second long edge", etc.
+
 ### Sequence Numbers
 A sequence number can be added to the front of each file name. This
 provides a reminder of the order of operations and will generally
@@ -51,6 +52,7 @@ each folder.
 In the above example, when adding sequence numbers the files in
 the "Block" folder would have the names "1 first edge" and "2 second
 edge".
+
 ### Fusion for Personal Use
 The free version of Fusion now has some limitations on G-code
 output: It will not support tool changes, and it slows down all
@@ -71,6 +73,24 @@ In addition, you can also select the option to restore rapid (G0)
 moves. This analysis is experimental and should be reviewed 
 before use (comments are included where the G-code is changed).
 You are responsible for ensuring a tool crash does not occur.
+
+### Rename Setups
+`Post Process All` can now perform a search-and-replace on setup names.
+The search will apply to all setups unless you select specific setups
+and check the box `Only selected setups`. This is a great way to collect
+a group of setups into a subfolder, for example.
+
+A special case has been added to make it easy to insert text 
+(such as a folder name) at the beginning of a setup name. If the
+search string is empty, the text in the `Replace with this string` 
+field will be prepended to each setup name.
+
+The search-and-replace is executed immediately when you click the
+![image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/resources/Rename/16x16.png)
+icon. You can then cancel 'Post Process All' if that's all you want to do.
+Review the changes to make sure everything looks right, and you can
+use Fusion's `Undo` command if necessary.
+
 ### Installation
 To install, start by putting the `PostProcessAll.py` and 
 `PostProcessAll.manifest` files along with
@@ -82,15 +102,16 @@ come back and get updates.
 
 In Fusion, go to the `Tools` tab in the `Design` workspace, or the
 `Utilities` tab in the `Manufacture` workspace. Select the
-`Add-Ins` command, which will bring up the `Scripts and Add-Ins` dialog.
-Switch to the `Add-Ins` tab, then click the green `+` to add a new
-add-in. You can now browse to the folder in which you placed the
+`Scripts and Add-Ins` command, which will bring up the `Scripts and Add-Ins` dialog.
+Filter by `Add-Ins`, then click the `+` and select `Script or add-in from device` .
+You can now browse to the folder in which you placed the
 `Post Process All` add-in files.
 
-Once the folder is selected, you will be returned to the Add-Ins dialog
-and find that PostProcessAll now appears in the list of `My Add-Ins`.
+Once the folder is selected, you will be returned to the `Scripts and Add-Ins` dialog
+and find that `PostProcessAll` now appears in the list.
 Select it in the list, ensure `Run on Startup` is checked, and then
-click the `Run` button. It should like like this:
+click the switch in the `Run` column. The dialog closes immediately.
+If you open it again, it should something like this:
 
 ![AddIn Image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/FusionAddIn.PNG)
 
@@ -98,11 +119,6 @@ To see the new command, go to the `Manufacture` workspace and select the
 `Milling` or `Turning`tab. The command appears on the toolbar next to
 the native Post Process command. It also appears in the Actions
 drop-down menu.
-
-If you give `Post Process All` a try, please help compile a list of
-how it does with different post proecessors. Post new results
-— success or failure — on the Issues page. That info will make
-it into the table below.
 
 **New to Git?** A great Git GUI is [SmartGit](https://www.syntevo.com/smartgit/),
 which hobbyists can use for free. You just select `Clone...` from its
@@ -119,8 +135,9 @@ delay for posting operations in the `Advanced` section of the
 The concatenation and modification of G-code has been only been lightly
 tested, and work is ongoing. Given that there are
 very specific assumptions about what the G-code input will look like,
-it would not be surprising to find problems come up. Feel free to report
-them on the Issues page, and include the G-code files.
+it would not be surprising to find problems come up. If you report a 
+problem on the Issues page, be sure to specify what post processor
+you are using and include the G-code files.
 
 ### Compatibility
 Compatibility can be an issue if you have Fusion for Personal Use and
