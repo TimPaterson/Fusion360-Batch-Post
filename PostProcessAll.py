@@ -261,7 +261,7 @@ def GetSetups(cam, settings, setups):
     return setups
 
 
-def RenameSetups(settings, setups, find, replace):
+def RenameSetups(settings, setups, find, replace, isRegex):
     try:
         app = adsk.core.Application.get()
         ui  = app.userInterface
@@ -272,11 +272,14 @@ def RenameSetups(settings, setups, find, replace):
             cam = adsk.cam.CAM.cast(product)
             setups = GetSetups(cam, settings, setups)
             for setup in setups:
-                if find == "":
-                    # special case, prepend
-                    newName = replace + setup.name
+                if isRegex:
+                    newName = re.sub(find, replace, setup.name)
                 else:
-                    newName = setup.name.replace(find, replace)
+                    if find == "":
+                        # special case, prepend
+                        newName = replace + setup.name
+                    else:
+                        newName = setup.name.replace(find, replace)
 
                 if setup.name != newName:
                     setup.name = newName
@@ -519,6 +522,19 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
 
             # Rename
             inputGroup = inputs.addGroupCommandInput("groupRename", "Rename Setups")
+
+            # check box to use regular expressions
+            input = inputGroup.children.addBoolValueInput("regex",
+                                                          "Use Python regular expressions",
+                                                          True,
+                                                          "",
+                                                          False)
+            input.tooltip = "Search With Regular Expressions"
+            input.tooltipDescription = (
+                "Treat the search string as a Python regular expression (regex). "
+                "This is extremely flexible but also very technical. Refer to "
+                "Python documentation for details."
+            )
 
             # text box as a label for search field
             input = inputGroup.children.addTextBoxCommandInput("searchLabel", 
@@ -779,7 +795,11 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
         # Code to react to the event.
         button = inputs.itemById("replace")
         if button.value:
-            RenameSetups(self.docSettings, self.selectedSetups, inputs.itemById("findString").value, inputs.itemById("replaceString").value)
+            RenameSetups(self.docSettings, 
+                         self.selectedSetups, 
+                         inputs.itemById("findString").value, 
+                         inputs.itemById("replaceString").value,
+                         inputs.itemById("regex").value)
             button.value = False
         else:
             PerformPostProcess(self.docSettings, self.selectedSetups)
