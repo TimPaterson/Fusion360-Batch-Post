@@ -1,12 +1,12 @@
-## Post Process All: Fusion CAM Batch Post Add-In
-#### NEW! Provides renaming setups using search-and-replace.
+# Post Process All: Fusion CAM Batch Post Add-In
+### New in Version 2: All post processor options are available through `NC Programs`
 
 ### Introduction
 This add-in for Fusion will post process all CAM setups, or any
 selection of setups you choose, at once.
 Each setup is put in a file with the name of the setup. You can
 optionally use a special setup naming convention to put files in
-subfolders. You can also put sequence numbers on the name to maintain
+subfolders. You can also put sequence numbers on the names to maintain
 the order of operations.
 
 Note that the setup name must be a valid file name. It couldn't,
@@ -18,13 +18,29 @@ the native Post Process command called Post Process All:
 
 ![Post Process All](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/resources/Command/32x32.png)
 
-Clicking this command will bring up the following dialog:
+### First Run
+
+`Post Process All` requires an `NC Program`. The `NC Program` is used to select
+the post processor to use and to choose the output foldeer for G-code files.
+If you don't have an `NC Program`, `Post Process All` will create one, inform
+you, and stop. You must then find the `NC Program` in the browser and open
+it to finish its initialization and verify it is set up correctly.
+
+![NC Program in Browser Image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/NcProgramInBrowser.png)
+
+Once you have an `NC Program`, `Post Process All` will fully start and
+show you this dialog:
 
 ![Dialog Image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/DialogImage.PNG)
 
-The first time you run `Post Process All`, the `Output Folder` and `Post Processor`
-fields will be blank. You must set both of these fields before you can
-click OK. Once `Post Process All` has been run, all settings will be saved in
+At the top you can choose which `NC Program` to use. You may have any 
+number of NC Programs, using them to easily switch between post processors, 
+output folder, or any options. Note that some settings are managed by
+`Post Process All` and will have no effect if you change them. These
+include `Name/number`, `File name`, and `Operations`. The browser may
+mark the `NC Program` with an error symbol, but this can be ignored.
+
+Once `Post Process All` has been run, all settings will be saved in
 the design. New designs will also be given default settings.
 
 ### Subfolders
@@ -75,8 +91,8 @@ before use (comments are included where the G-code is changed).
 You are responsible for ensuring a tool crash does not occur.
 
 ### Rename Setups
-`Post Process All` can now perform a search-and-replace on setup names.
-The search will apply to all setups unless you select specific setups
+`Post Process All` can perform a search-and-replace on setup names.
+Like post processing, the search will apply to all setups unless you select specific setups
 and check the box `Only selected setups`. This is a great way to collect
 a group of setups into a subfolder, for example.
 

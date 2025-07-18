@@ -5,13 +5,12 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 9
+version = 10
 
 # Initial default values of settings
 defaultSettings = {
     "version" : version,
-    "post" : "",
-    "units" : adsk.cam.PostOutputUnitOptions.DocumentUnitsOutput,
+    "ncProgram": "",
     "output" : "",
     "sequence" : True,
     "twoDigits" : False,
@@ -20,12 +19,10 @@ defaultSettings = {
     "splitSetup" : False,
     "fastZ" : False,
     "toolChange" : "M9 G30",
-    "fileExt" : ".nc",
     "numericName" : False,
     "endCodes" : "M5 M9 M30",
     "onlySelected" : False,
     # Groups are expanded or not
-    "groupOutput" : True,
     "groupPersonal" : True,
     "groupPost" : True,
     "groupAdvanced" : False,
@@ -57,6 +54,7 @@ constAddFeedGcode = " F{} (Feed rate added)\n"
 constMotionGcodeSet = {0,1,2,3,33,38,73,76,80,81,82,84,85,86,87,88,89}
 constHomeGcodeSet = {28, 30}
 constLineNumInc = 5
+constNcProgramName = "PostProcessAll NC Program"
 
 # Tool tip text
 toolTip = (
@@ -240,7 +238,7 @@ def CountOutputFolderFiles(folder, limit, fileExt):
 
 
 def ExpandFileName(file):
-    return os.path.expanduser(file)
+    return os.path.expanduser(file).replace("\\", "/")
 
 
 def CompressFileName(file):
@@ -254,11 +252,18 @@ def CompressFileName(file):
 
 def GetSetups(cam, settings, setups):
     if len(setups) == 0 or not settings["onlySelected"]:
-        setups = list()
+        setups = []
         # move all setups into a list
         for setup in cam.setups:
             setups.append(setup)
     return setups
+
+
+def GetNcProgram(cam, settings):
+    for program in cam.ncPrograms:
+        if program.name == settings["ncProgram"]:
+            return program
+    return cam.ncPrograms.item(0)
 
 
 def RenameSetups(settings, setups, find, replace, isRegex):
@@ -266,26 +271,24 @@ def RenameSetups(settings, setups, find, replace, isRegex):
         app = adsk.core.Application.get()
         ui  = app.userInterface
         doc = app.activeDocument
-        product = doc.products.itemByProductType(constCAMProductId)
-
-        if product != None:
-            cam = adsk.cam.CAM.cast(product)
-            setups = GetSetups(cam, settings, setups)
-            for setup in setups:
-                if isRegex:
-                    newName = re.sub(find, replace, setup.name)
+        cam = adsk.cam.CAM.cast(doc.products.itemByProductType(constCAMProductId))
+        setups = GetSetups(cam, settings, setups)
+        
+        for setup in setups:
+            if isRegex:
+                newName = re.sub(find, replace, setup.name)
+            else:
+                if find == "":
+                    # special case, prepend
+                    newName = replace + setup.name
                 else:
-                    if find == "":
-                        # special case, prepend
-                        newName = replace + setup.name
-                    else:
-                        newName = setup.name.replace(find, replace)
+                    newName = setup.name.replace(find, replace)
 
-                if setup.name != newName:
-                    setup.name = newName
+            if setup.name != newName:
+                setup.name = newName
 
-            # Save settings in document attributes
-            settingsMgr.SaveSettings(doc.attributes, settings)
+        # Save settings in document attributes
+        settingsMgr.SaveSettings(doc.attributes, settings)
 
     except:
         pass
@@ -303,32 +306,76 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
 
             # Get document attributes that will set initial values
             app = adsk.core.Application.get()
+            cam = adsk.cam.CAM.cast(app.activeDocument.products.itemByProductType(constCAMProductId))
             docSettings  = settingsMgr.GetSettings(app.activeDocument.attributes)
 
             # See if we're doing only selected setups
-            selectedSetups = list()
-            product = app.activeDocument.products.itemByProductType(constCAMProductId)
-            if product != None:
-                for setup in product.setups:
-                    if setup.isSelected:
-                        selectedSetups.append(setup)
-                        
+            selectedSetups = []
+            for setup in cam.setups:
+                if setup.isSelected:
+                    selectedSetups.append(setup)
+
+            # Get the NCProgram
+            programs = cam.ncPrograms
+            if programs.count == 0:
+                ncInput = programs.createInput()
+                ncInput.displayName = constNcProgramName
+                program = programs.add(ncInput)
+                program.parameters.itemByName("nc_program_output_folder").value.value = ExpandFileName(docSettings["output"])
+                selectedSetups = None
+            elif programs.count == 1:
+                program = programs.item(0)
+            else:
+                haveProgram = False
+                for program in programs:
+                    if program.name == docSettings["ncProgram"]:
+                        haveProgram = True
+                        break
+                if not haveProgram:
+                    program = programs.item(0)              
+            docSettings["ncProgram"] = program.name
+
+            # Connect to the execute event.
+            onExecute = CommandExecuteHandler(docSettings, selectedSetups)
+            cmd.execute.add(onExecute)
+            handlers.append(onExecute)
+
+            # If we created the NCProgram, terminate now so the user can finish filling it in
+            if selectedSetups == None:
+                app.userInterface.messageBox(
+                    "PostProcessAll has created an NC Program for you. You must open it once to "
+                    "finish initializing it. The output folder should be set correctly. The default "
+                    "post processor has been selected, so make sure this is correct.\n\n"
+                    "The program and file name, as well as operations on the Operations tab, are set "
+                    "by PostProcessAll when it is running; you do not need to set these. You can "
+                    "ignore an error symbol on the NC Program in the browser.")
+                cmd.isAutoExecute = True
+                return
+
             # Add inputs that will appear in a dialog
             inputs = cmd.commandInputs
 
-            # output folder
-            inputGroup = inputs.addGroupCommandInput("groupOutput", "Output Folder")
-            input = inputGroup.children.addStringValueInput("output", "", docSettings["output"])
+            # text box as a label for NC Program
+            input = inputs.addTextBoxCommandInput("ncProgramLabel", 
+                                                   "", 
+                                                   "NC Program:",
+                                                   1,
+                                                   True)
             input.isFullWidth = True
-            input.tooltip = "Output Folder"
-            input.tooltipDescription = (
-                "Full path name of the output folder. Any subfolders, as denoted "
-                "by colons in the setup name, will be relative this folder.")
+            label = input
 
-            input = inputGroup.children.addBoolValueInput("browseOutput", "Browse", False)
-            input.resourceFolder = "resources/Browse"
-            input.tooltip = "Browse for Output Folder"
-            inputGroup.isExpanded = docSettings["groupOutput"]
+            input = inputs.addDropDownCommandInput("ncProgram", 
+                                                   "NC Program",
+                                                   adsk.core.DropDownStyles.TextListDropDownStyle)
+            for listItem in programs:
+                input.listItems.add(listItem.name, listItem.name == program.name)
+            input.isFullWidth = True
+            input.tooltip = "NC Program to Use"
+            input.tooltipDescription = (
+                "Post processing will use the settings from the selected NC Program."
+            )
+            label.tooltip = input.tooltip
+            label.tooltipDescription = input.tooltipDescription
 
             # check box to use only selected setups
             input = inputs.addBoolValueInput("onlySelected", 
@@ -407,25 +454,6 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             input.tooltipDescription = (
                 "Sequence numbers 0 - 9 will have a leading zero added, becoming"
                 '"01" to "09". This could be useful for formatting or sorting.')
-
-            # select units
-            input = inputs.addDropDownCommandInput("units", 
-                                                   "Post output units",
-                                                   adsk.core.DropDownStyles.TextListDropDownStyle)
-            # Document Unit = 0
-            # Inches = 1
-            # Millimeters = 2
-            # We'll use these convenient values so the item index will be the value
-            input.listItems.add('Document units', True)
-            input.listItems.add('Inches', False)
-            input.listItems.add('Milimeters', False)
-            input.listItems.item(docSettings["units"]).isSelected = True
-            input.isFullWidth = True
-            input.tooltip = "Post Output Units"
-            input.tooltipDescription = (
-                "Select the units to be used in the output - inches or millimeters. "
-                "This may be chosen explicitly, or the units used in the design "
-                "can be used.")
 
             # "Personal Use" version
             # check box to split up setup into individual operations
@@ -534,6 +562,9 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "Treat the search string as a Python regular expression (regex). "
                 "This is extremely flexible but also very technical. Refer to "
                 "Python documentation for details."
+                "<p>One example is to put $ in the search box. This special "
+                "symbol searches for the end of the setup name. Then the replacement "
+                "string will be appended to the existing name."
             )
 
             # text box as a label for search field
@@ -603,17 +634,6 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             
             # post processor
             inputGroup = inputs.addGroupCommandInput("groupPost", "Post Processor")
-            input = inputGroup.children.addStringValueInput("post", "", docSettings["post"])
-            input.isFullWidth = True
-            input.tooltip = "Post Processor"
-            input.tooltipDescription = (
-                "Full path name of the post processor (.cps file).")
-            
-            # Browse for post processor
-            input = inputGroup.children.addBoolValueInput("browsePost", "Browse", False)
-            input.resourceFolder = "resources/Browse"
-            input.tooltip = "Browse for Post Processor"
-            inputGroup.isExpanded = docSettings["groupPost"]
 
             # Numeric name required?
             input = inputGroup.children.addBoolValueInput("numericName",
@@ -627,10 +647,6 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "only sequence numbers. The option to prepend sequence numbers "
                 "will have no effect.")
 
-            # File name extension
-            input = inputGroup.children.addStringValueInput("fileExt", "Output file extension", docSettings["fileExt"])
-            input.tooltip = "Output File Extension"
-            
             # button to save default settings
             input = inputs.addBoolValueInput("save", "Save as default", False)
             input.resourceFolder = "resources/Save"
@@ -652,11 +668,6 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             onValidateInputs = CommandValidateInputsHandler()
             cmd.validateInputs.add(onValidateInputs)
             handlers.append(onValidateInputs)
-
-            # Connect to the execute event.
-            onExecute = CommandExecuteHandler(docSettings, selectedSetups)
-            cmd.execute.add(onExecute)
-            handlers.append(onExecute)
         except:
             ui = app.userInterface
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
@@ -677,7 +688,7 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
             inputs = eventArgs.inputs
 
             doc = app.activeDocument
-            product = doc.products.itemByProductType(constCAMProductId)
+            cam = adsk.cam.CAM.cast(doc.products.itemByProductType(constCAMProductId))
 
             # See if button clicked
             input = eventArgs.input
@@ -686,37 +697,13 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
 
             elif input.id == "replace":
                 cmd.doExecute(False)    # do it in execute handler for Undo
-
-            elif input.id == "browsePost":
-                dialog = ui.createFileDialog()
-                post = self.docSettings["post"]
-                if len(post) != 0:
-                    dialog.initialDirectory = ExpandFileName(os.path.dirname(post))
-                else:
-                    dialog.initialDirectory = product.genericPostFolder
-
-                dialog.filter = "post processors (*.cps);;All files (*.*)"
-                dialog.title = "Select post processor"
-                if dialog.showOpen() == adsk.core.DialogResults.DialogOK:
-                    filename = CompressFileName(dialog.filename)
-                    self.docSettings["post"] = filename
-                    inputs.itemById("post").value = filename
-
-            elif input.id == "browseOutput":
-                dialog = ui.createFolderDialog()
-                dialog.initialDirectory = ExpandFileName(self.docSettings["output"])
-                dialog.title = "Select output folder"
-                if dialog.showDialog() == adsk.core.DialogResults.DialogOK:
-                    folder = CompressFileName(dialog.folder)
-                    self.docSettings["output"] = folder
-                    inputs.itemById("output").value = folder
-
-            elif input.id == "units":
-                self.docSettings[input.id] = input.selectedItem.index
+                return
 
             elif input.id in self.docSettings:
                 if input.objectType == adsk.core.GroupCommandInput.classType():
                     self.docSettings[input.id] = input.isExpanded
+                elif input.objectType == adsk.core.DropDownCommandInput.classType():
+                    self.docSettings[input.id] = input.selectedItem.name
                 else:
                     self.docSettings[input.id] = input.value
 
@@ -750,32 +737,12 @@ class CommandValidateInputsHandler(adsk.core.ValidateInputsEventHandler):
     def notify(self, args):
         app = adsk.core.Application.get()
         ui  = app.userInterface
+
+        # No validation currently performed. Skeleton code retained.
         try:
             eventArgs = adsk.core.ValidateInputsEventArgs.cast(args)
             inputs = eventArgs.firingEvent.sender.commandInputs
 
-            fIsOutputValid = len(inputs.itemById("output").value) != 0
-            post = ExpandFileName(inputs.itemById("post").value)
-            fIsPostValid = post.endswith(".cps") and os.path.isfile(post)
-            eventArgs.areInputsValid = fIsOutputValid and fIsPostValid
-            error = inputs.itemById("error")
-            error.isVisible = not eventArgs.areInputsValid
-            if not eventArgs.areInputsValid:
-                # Build a message explaining what's missing
-                err1 = err2 = combine = ""
-                if not fIsOutputValid:
-                    err1 = "the output folder"
-                    # ensure it's not collapsed
-                    inputs.itemById("groupOutput").isExpanded = True
-                if not fIsPostValid:
-                    err2 = "a valid post processor"
-                    # ensure it's not collapsed
-                    inputs.itemById("groupPost").isExpanded = True
-                if not fIsOutputValid and not fIsPostValid:
-                    combine = " and "
-                msg = "<b>Please select {}{}{}.</b>".format(err1, combine, err2)
-                # Display message
-                error.formattedText = msg
         except:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
@@ -793,16 +760,17 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
         inputs = cmd.commandInputs
 
         # Code to react to the event.
-        button = inputs.itemById("replace")
-        if button.value:
-            RenameSetups(self.docSettings, 
-                         self.selectedSetups, 
-                         inputs.itemById("findString").value, 
-                         inputs.itemById("replaceString").value,
-                         inputs.itemById("regex").value)
-            button.value = False
-        else:
-            PerformPostProcess(self.docSettings, self.selectedSetups)
+        if self.selectedSetups != None:
+            button = inputs.itemById("replace")
+            if button.value:
+                RenameSetups(self.docSettings, 
+                            self.selectedSetups, 
+                            inputs.itemById("findString").value, 
+                            inputs.itemById("replaceString").value,
+                            inputs.itemById("regex").value)
+                button.value = False
+            else:
+                PerformPostProcess(self.docSettings, self.selectedSetups)
 
 
 def PerformPostProcess(docSettings, setups):
@@ -812,6 +780,7 @@ def PerformPostProcess(docSettings, setups):
         app = adsk.core.Application.get()
         ui  = app.userInterface
         doc = app.activeDocument
+        cam = adsk.cam.CAM.cast(doc.products.itemByProductType(constCAMProductId))
 
         # Save settings in document attributes
         settingsMgr.SaveSettings(doc.attributes, docSettings)
@@ -819,115 +788,132 @@ def PerformPostProcess(docSettings, setups):
         cntFiles = 0
         cntSkipped = 0
         lstSkipped = ""
-        product = doc.products.itemByProductType(constCAMProductId)
 
-        if product != None:
-            cam = adsk.cam.CAM.cast(product)
-            setups = GetSetups(cam, docSettings, setups)
+        program = GetNcProgram(cam, docSettings);
+        parameters = program.parameters
+        setups = GetSetups(cam, docSettings, setups)
 
-            if len(setups) != 0 and cam.allOperations.count != 0:
-                # make sure we're not going to delete too much
-                outputFolder = ExpandFileName(docSettings["output"])
-                if not docSettings["delFiles"]:
+        if len(setups) != 0 and cam.allOperations.count != 0:
+            # normalize output folder for this user
+            outputFolder = parameters.itemByName("nc_program_output_folder").value.value
+            try:
+                pathlib.Path(outputFolder).mkdir(exist_ok=True)
+            except Exception as exc:
+                # see if we can map it to folder with compressed user
+                compressedName = docSettings["output"]
+                if compressedName[0] == "~" and compressedName[1:] == outputFolder[-(len(compressedName) - 1):]:
+                    # yes, it matches
+                    outputFolder = ExpandFileName(compressedName)
+                else:
+                    # UNDONE: report error in output folder?
+                    pass
+
+            docSettings["output"] = CompressFileName(outputFolder)
+
+            # make sure we're not going to delete too much
+            if not docSettings["delFiles"]:
+                docSettings["delFolder"] = False
+
+            if docSettings["delFolder"]:
+                fileExt = parameters.itemByName("nc_program_nc_extension").value.value
+                strMsg = CountOutputFolderFiles(outputFolder, len(setups), fileExt)
+                if strMsg:
                     docSettings["delFolder"] = False
+                    strMsg = (
+                        "The output folder contains {}. "
+                        "It will not be deleted. You may wish to make sure you selected "
+                        "the correct folder. If you want the folder deleted, you must "
+                        "do it manually."
+                        ).format(strMsg)
+                    res = ui.messageBox(strMsg, 
+                                        constCmdName,
+                                        adsk.core.MessageBoxButtonTypes.OKCancelButtonType,
+                                        adsk.core.MessageBoxIconTypes.WarningIconType)
+                    if res == adsk.core.DialogResults.DialogCancel:
+                        return  # abort!
 
-                if docSettings["delFolder"]:
-                    strMsg = CountOutputFolderFiles(outputFolder, len(setups), docSettings["fileExt"])
-                    if strMsg:
-                        docSettings["delFolder"] = False
-                        strMsg = (
-                            "The output folder contains {}. "
-                            "It will not be deleted. You may wish to make sure you selected "
-                            "the correct folder. If you want the folder deleted, you must "
-                            "do it manually."
-                            ).format(strMsg)
-                        res = ui.messageBox(strMsg, 
-                                            constCmdName,
-                                            adsk.core.MessageBoxButtonTypes.OKCancelButtonType,
-                                            adsk.core.MessageBoxIconTypes.WarningIconType)
-                        if res == adsk.core.DialogResults.DialogCancel:
-                            return  # abort!
+            if docSettings["delFolder"]:
+                try:
+                    shutil.rmtree(outputFolder, True)
+                except:
+                    pass #ignore errors
 
-                if docSettings["delFolder"]:
-                    try:
-                        shutil.rmtree(outputFolder, True)
-                    except:
-                        pass #ignore errors
+            progress = ui.createProgressDialog()
+            progress.isCancelButtonShown = True
+            progressMsg = "{} files written to " + outputFolder
+            progress.show("Post Processing...", "", 0, len(setups))
+            progress.progressValue = 1 # try to get it to display
+            progress.progressValue = 0
 
-                progress = ui.createProgressDialog()
-                progress.isCancelButtonShown = True
-                progressMsg = "{} files written to " + outputFolder
-                progress.show("Post Processing...", "", 0, len(setups))
-                progress.progressValue = 1 # try to get it to display
-                progress.progressValue = 0
+            cntSetups = 0
+            seqDict = dict()
 
-                cntSetups = 0
-                seqDict = dict()
+            # We pass through all setups even if only some are selected
+            # so numbering scheme doesn't change.
+            for setup in cam.setups:
+                if progress.wasCancelled:
+                    break
+                if not setup.isSuppressed and setup.allOperations.count != 0:
+                    nameList = setup.name.split(':')    # folder separator
+                    setupFolder = outputFolder
+                    cnt = len(nameList) - 1
+                    i = 0
+                    while i < cnt:
+                        setupFolder += "/" + nameList[i].strip()
+                        i += 1
+                
+                    # keep a separate sequence number for each folder
+                    if setupFolder in seqDict:
+                        seqDict[setupFolder] += 1
+                        # skip if we're not actually including this setup
+                        if setup not in setups:
+                            continue
+                    else:
+                        # first file for this folder
+                        seqDict[setupFolder] = 1
+                        # skip if we're not actually including this setup
+                        if setup not in setups:
+                            continue
 
-                # We pass through all setups even if only some are selected
-                # so numbering scheme doesn't change.
-                for setup in cam.setups:
-                    if progress.wasCancelled:
-                        break
-                    if not setup.isSuppressed and setup.allOperations.count != 0:
-                        nameList = setup.name.split(':')    # folder separator
-                        setupFolder = outputFolder
-                        cnt = len(nameList) - 1
-                        i = 0
-                        while i < cnt:
-                            setupFolder += "/" + nameList[i].strip()
-                            i += 1
-                    
-                        # keep a separate sequence number for each folder
-                        if setupFolder in seqDict:
-                            seqDict[setupFolder] += 1
-                            # skip if we're not actually including this setup
-                            if setup not in setups:
-                                continue
+                        if (docSettings["delFiles"]):
+                            # delete all the files in the folder
+                            try:
+                                for entry in os.scandir(setupFolder):
+                                    if entry.is_file():
+                                        try:
+                                            os.remove(entry.path)
+                                        except:
+                                            pass #ignore errors
+                            except:
+                                pass #ignore errors
+
+                    # prepend sequence number if enabled
+                    fname = nameList[i].strip()
+                    if docSettings["sequence"] or docSettings["numericName"]:
+                        seq = seqDict[setupFolder]
+                        seqStr = str(seq)
+                        if docSettings["twoDigits"] and seq < 10:
+                            seqStr = "0" + seqStr
+                        if docSettings["numericName"]:
+                            fname = seqStr
                         else:
-                            # first file for this folder
-                            seqDict[setupFolder] = 1
-                            # skip if we're not actually including this setup
-                            if setup not in setups:
-                                continue
+                            fname = seqStr + ' ' + fname
 
-                            if (docSettings["delFiles"]):
-                                # delete all the files in the folder
-                                try:
-                                    for entry in os.scandir(setupFolder):
-                                        if entry.is_file():
-                                            try:
-                                                os.remove(entry.path)
-                                            except:
-                                                pass #ignore errors
-                                except:
-                                    pass #ignore errors
+                    # post the file
+                    status = PostProcessSetup(fname, setup, setupFolder, docSettings, program)
+                    if status == None:
+                        cntFiles += 1
+                    else:
+                        cntSkipped += 1
+                        lstSkipped += "\nFailed on setup " + setup.name + ": " + status
+                        
+                cntSetups += 1
+                progress.message = progressMsg.format(cntFiles)
+                progress.progressValue = cntSetups
 
-                        # prepend sequence number if enabled
-                        fname = nameList[i].strip()
-                        if docSettings["sequence"] or docSettings["numericName"]:
-                            seq = seqDict[setupFolder]
-                            seqStr = str(seq)
-                            if docSettings["twoDigits"] and seq < 10:
-                                seqStr = "0" + seqStr
-                            if docSettings["numericName"]:
-                                fname = seqStr
-                            else:
-                                fname = seqStr + ' ' + fname
-
-                        # post the file
-                        status = PostProcessSetup(fname, setup, setupFolder, docSettings)
-                        if status == None:
-                            cntFiles += 1
-                        else:
-                            cntSkipped += 1
-                            lstSkipped += "\nFailed on setup " + setup.name + ": " + status
-                         
-                    cntSetups += 1
-                    progress.message = progressMsg.format(cntFiles)
-                    progress.progressValue = cntSetups
-
-                progress.hide()
+            progress.hide()
+            # restore program output folder
+            parameters.itemByName("nc_program_output_folder").value.value = outputFolder
 
         # done with setups, report results
         if cntSkipped != 0:
@@ -941,6 +927,7 @@ def PerformPostProcess(docSettings, setups):
                 constCmdName, 
                 adsk.core.MessageBoxButtonTypes.OKButtonType,
                 adsk.core.MessageBoxIconTypes.WarningIconType)
+            
 
     except:
         if progress:
@@ -948,7 +935,7 @@ def PerformPostProcess(docSettings, setups):
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
-def PostProcessSetup(fname, setup, setupFolder, docSettings):
+def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
     ui = None
     fileHead = None
     fileBody = None
@@ -959,11 +946,11 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
         app = adsk.core.Application.get()
         ui  = app.userInterface
         doc = app.activeDocument
-        product = doc.products.itemByProductType(constCAMProductId)
-        cam = adsk.cam.CAM.cast(product)
+        cam = adsk.cam.CAM.cast(doc.products.itemByProductType(constCAMProductId))
+        parameters = program.parameters
 
         # Verify file name is valid by creating it now
-        fileExt = docSettings["fileExt"]
+        fileExt = parameters.itemByName("nc_program_nc_extension").value.value
         path = setupFolder + "/" + fname + fileExt
         try:
             pathlib.Path(setupFolder).mkdir(parents=True, exist_ok=True)
@@ -977,23 +964,25 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             while not genStat.isGenerationCompleted:
                 time.sleep(.1)
 
-        # Create PostProcessInput
+        # set up NCProgram parameters
         opName = fname
         opFolder = setupFolder
         if docSettings["splitSetup"]:
             opName = constOpTmpFile
             opFolder = tempfile.gettempdir()    # e.g., C:\Users\Tim\AppData\Local\Temp
-        postInput = adsk.cam.PostProcessInput.create(opName, 
-                                                    ExpandFileName(docSettings["post"]), 
-                                                    opFolder, 
-                                                    docSettings["units"])
-        postInput.isOpenInEditor = False
+            opFolder = opFolder.replace("\\", "/")
+
+        parameters.itemByName("nc_program_openInEditor").value.value = False
+        parameters.itemByName("nc_program_output_folder").value.value = opFolder
+        parameters.itemByName("nc_program_filename").value.value = opName
+        parameters.itemByName("nc_program_name").value.value = fname
 
         # Do it all at once?
         if not docSettings["splitSetup"]:
-            fileHead.close();
+            fileHead.close()
             try:
-                if not cam.postProcess(setup, postInput):
+                program.operations = [setup]
+                if not program.postProcess(adsk.cam.NCProgramPostProcessOptions.create()):
                     return "Fusion reported an error."
                 time.sleep(constPostLoopDelay) # files missing sometimes unless we slow down (??)
                 return None
@@ -1064,8 +1053,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
             hasTool = op.hasToolpath
             if hasTool:
                 opHasTool = op
-            opList = adsk.core.ObjectCollection.create()
-            opList.add(op)
+            opList = [op]
             while i < ops.count:
                 op = ops[i]
                 if op.isSuppressed:
@@ -1073,18 +1061,19 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings):
                     continue
                 if op.hasToolpath:
                     if not hasTool:
-                        opList.add(op)
+                        opList.append(op)
                         opHasTool = op
                         i += 1
                     break
-                opList.add(op)
+                opList.append(op)
                 i += 1
 
             retries = docSettings["postRetries"]
             delay = docSettings["initialDelay"]
             while True:
                 try:
-                    if not cam.postProcess(opList, postInput):
+                    program.operations = opList
+                    if not program.postProcess(adsk.cam.NCProgramPostProcessOptions.create()):
                         retVal = "Fusion reported an error processing operation"
                         if (opHasTool != None):
                             retVal += ": " +  opHasTool.name
