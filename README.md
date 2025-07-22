@@ -21,21 +21,19 @@ the native Post Process command called Post Process All:
 ### First Run
 
 `Post Process All` requires an `NC Program`. The `NC Program` is used to select
-the post processor to use and to choose the output foldeer for G-code files.
-If you don't have an `NC Program`, `Post Process All` will create one, inform
-you, and stop. You must then find the `NC Program` in the browser and open
-it to finish its initialization and verify it is set up correctly.
+the post processor and to choose the output foldeer for G-code files.
+If you don't have an `NC Program`, `Post Process All` will create one. If you've
+run `Post Process All` before on this design, it will keep the previous
+output folder. Otherwise, you should probably cancel `Post Process All` and set the
+output folder in the `NC Program`.
 
-![NC Program in Browser Image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/NcProgramInBrowser.png)
-
-Once you have an `NC Program`, `Post Process All` will fully start and
-show you this dialog:
+`Post Process All` will present this dialog:
 
 ![Dialog Image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/DialogImage.PNG)
 
 At the top you can choose which `NC Program` to use. You may have any 
 number of NC Programs, using them to easily switch between post processors, 
-output folder, or any options. Note that some settings are managed by
+output folders, or any options. Note that some settings are managed by
 `Post Process All` and will have no effect if you change them. These
 include `Name/number`, `File name`, and `Operations`. The browser may
 mark the `NC Program` with an error symbol, but this can be ignored.

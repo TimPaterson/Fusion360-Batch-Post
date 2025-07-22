@@ -321,8 +321,9 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 ncInput = programs.createInput()
                 ncInput.displayName = constNcProgramName
                 program = programs.add(ncInput)
+                program.postConfiguration = program.postConfiguration
                 program.parameters.itemByName("nc_program_output_folder").value.value = ExpandFileName(docSettings["output"])
-                selectedSetups = None
+                program.parameters.itemByName("nc_program_createInBrowser").value.value = True
             elif programs.count == 1:
                 program = programs.item(0)
             else:
@@ -339,18 +340,6 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             onExecute = CommandExecuteHandler(docSettings, selectedSetups)
             cmd.execute.add(onExecute)
             handlers.append(onExecute)
-
-            # If we created the NCProgram, terminate now so the user can finish filling it in
-            if selectedSetups == None:
-                app.userInterface.messageBox(
-                    "PostProcessAll has created an NC Program for you. You must open it once to "
-                    "finish initializing it. The output folder should be set correctly. The default "
-                    "post processor has been selected, so make sure this is correct.\n\n"
-                    "The program and file name, as well as operations on the Operations tab, are set "
-                    "by PostProcessAll when it is running; you do not need to set these. You can "
-                    "ignore an error symbol on the NC Program in the browser.")
-                cmd.isAutoExecute = True
-                return
 
             # Add inputs that will appear in a dialog
             inputs = cmd.commandInputs
@@ -760,17 +749,16 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
         inputs = cmd.commandInputs
 
         # Code to react to the event.
-        if self.selectedSetups != None:
-            button = inputs.itemById("replace")
-            if button.value:
-                RenameSetups(self.docSettings, 
-                            self.selectedSetups, 
-                            inputs.itemById("findString").value, 
-                            inputs.itemById("replaceString").value,
-                            inputs.itemById("regex").value)
-                button.value = False
-            else:
-                PerformPostProcess(self.docSettings, self.selectedSetups)
+        button = inputs.itemById("replace")
+        if button.value:
+            RenameSetups(self.docSettings, 
+                        self.selectedSetups, 
+                        inputs.itemById("findString").value, 
+                        inputs.itemById("replaceString").value,
+                        inputs.itemById("regex").value)
+            button.value = False
+        else:
+            PerformPostProcess(self.docSettings, self.selectedSetups)
 
 
 def PerformPostProcess(docSettings, setups):
@@ -782,9 +770,6 @@ def PerformPostProcess(docSettings, setups):
         doc = app.activeDocument
         cam = adsk.cam.CAM.cast(doc.products.itemByProductType(constCAMProductId))
 
-        # Save settings in document attributes
-        settingsMgr.SaveSettings(doc.attributes, docSettings)
-
         cntFiles = 0
         cntSkipped = 0
         lstSkipped = ""
@@ -793,23 +778,23 @@ def PerformPostProcess(docSettings, setups):
         parameters = program.parameters
         setups = GetSetups(cam, docSettings, setups)
 
+        # normalize output folder for this user
+        outputFolder = parameters.itemByName("nc_program_output_folder").value.value
+        try:
+            pathlib.Path(outputFolder).mkdir(exist_ok=True)
+        except Exception as exc:
+            # see if we can map it to folder with compressed user
+            compressedName = docSettings["output"]
+            if compressedName[0] == "~" and compressedName[1:] == outputFolder[-(len(compressedName) - 1):]:
+                # yes, it matches
+                outputFolder = ExpandFileName(compressedName)
+
+        docSettings["output"] = CompressFileName(outputFolder)
+
+        # Save settings in document attributes
+        settingsMgr.SaveSettings(doc.attributes, docSettings)
+
         if len(setups) != 0 and cam.allOperations.count != 0:
-            # normalize output folder for this user
-            outputFolder = parameters.itemByName("nc_program_output_folder").value.value
-            try:
-                pathlib.Path(outputFolder).mkdir(exist_ok=True)
-            except Exception as exc:
-                # see if we can map it to folder with compressed user
-                compressedName = docSettings["output"]
-                if compressedName[0] == "~" and compressedName[1:] == outputFolder[-(len(compressedName) - 1):]:
-                    # yes, it matches
-                    outputFolder = ExpandFileName(compressedName)
-                else:
-                    # UNDONE: report error in output folder?
-                    pass
-
-            docSettings["output"] = CompressFileName(outputFolder)
-
             # make sure we're not going to delete too much
             if not docSettings["delFiles"]:
                 docSettings["delFolder"] = False

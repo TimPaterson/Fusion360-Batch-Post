@@ -6,7 +6,7 @@
 	"description":	{
 		"":	"Post process all CAM setups, optionally putting G-code files in subfolders and prepending a sequence number."
 	},
-	"version":	"2.0",
+	"version":	"2.1",
 	"runOnStartup":	true,
 	"supportedOS":	"windows|mac",
 	"editEnabled":	true
