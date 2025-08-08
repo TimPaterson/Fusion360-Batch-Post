@@ -24,7 +24,7 @@ defaultSettings = {
     "onlySelected" : False,
     # Groups are expanded or not
     "groupPersonal" : True,
-    "groupPost" : True,
+    "groupPost" : False,
     "groupAdvanced" : False,
     "groupRename" : False,
     # Retry policy
@@ -623,6 +623,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             
             # post processor
             inputGroup = inputs.addGroupCommandInput("groupPost", "Post Processor")
+            inputGroup.isExpanded = docSettings["groupPost"]
 
             # Numeric name required?
             input = inputGroup.children.addBoolValueInput("numericName",
