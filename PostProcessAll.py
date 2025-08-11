@@ -1035,23 +1035,24 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
             # Look ahead for operations without a toolpath. This can happen
             # with a manual operation. Group it with current operation.
             # Or if first, group it with subsequent ones.
+            # Also group together operations with the same tool number
             opHasTool = None
+            curTool = -1
             hasTool = op.hasToolpath
             if hasTool:
                 opHasTool = op
+                curTool = op.tool.parameters.itemByName("tool_number").value.value
             opList = [op]
             while i < ops.count:
                 op = ops[i]
-                if op.isSuppressed:
-                    i += 1
-                    continue
-                if op.hasToolpath:
-                    if not hasTool:
-                        opList.append(op)
-                        opHasTool = op
-                        i += 1
-                    break
-                opList.append(op)
+                if not op.isSuppressed:
+                    if op.hasToolpath and op.tool.parameters.itemByName("tool_number").value.value != curTool:
+                        if not hasTool:
+                            opList.append(op)
+                            opHasTool = op
+                            i += 1
+                        break
+                    opList.append(op)
                 i += 1
 
             retries = docSettings["postRetries"]
@@ -1147,32 +1148,21 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
                 line = fileOp.readline()
 
             # Body starts at tool code, T
-            fBody = False
             while True:
                 match = regBody.match(line).groupdict()
                 line = match["line"]        # filter off line number if present
                 fNum = match["N"] != None
-                if (fBody):
-                    break
-                toolCur = match["T"]
-                if (toolCur != None):
-                    toolCur = int(toolCur)
-                    if not fFirst:
-                        # Is this a tool change?
-                        if toolCur != toolLast:
-                            if len(toolChange) != 0:
-                                if fToolChangeNum:
-                                    # Add line number to tool change
-                                    for code in toolChange:
-                                        fileBody.write("N" + str(lineNum) + " " + code)
-                                        lineNum += constLineNumInc
-                                else:
-                                    fileBody.write(toolChange)
+
+                if (match["T"] != None):
+                    if not fFirst and len(toolChange) != 0:
+                        # have tool change G-codes to add
+                        if fToolChangeNum:
+                            # Add line number to tool change
+                            for code in toolChange:
+                                fileBody.write("N" + str(lineNum) + " " + code)
+                                lineNum += constLineNumInc
                         else:
-                            fBody = True
-                            line = fileOp.readline()
-                            continue    # don't output tool line
-                    toolLast = toolCur
+                            fileBody.write(toolChange)
                     break
 
                 if fFirst or line[0] == "(":
