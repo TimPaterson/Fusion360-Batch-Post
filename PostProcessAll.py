@@ -1032,13 +1032,15 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
             if op.isSuppressed:
                 continue
 
-            # Look ahead for operations without a toolpath. This can happen
-            # with a manual operation. Group it with current operation.
+            # Look ahead for operations without a toolpath, or operations with the same tool.
+            # This can happen with a manual operation. Group it with current operation.
             # Or if first, group it with subsequent ones.
             opHasTool = None
+            currentTool = None
             hasTool = op.hasToolpath
             if hasTool:
                 opHasTool = op
+                currentTool = json.loads(op.tool.toJson())["guid"]
             opList = [op]
             while i < ops.count:
                 op = ops[i]
@@ -1046,11 +1048,15 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
                     i += 1
                     continue
                 if op.hasToolpath:
-                    if not hasTool:
-                        opList.append(op)
-                        opHasTool = op
-                        i += 1
-                    break
+                    nextTool = json.loads(op.tool.toJson())["guid"]
+                    if nextTool != currentTool:
+                        currentTool = nextTool
+
+                        if not hasTool:
+                            opList.append(op)
+                            opHasTool = op
+                            i += 1
+                        break
                 opList.append(op)
                 i += 1
 
