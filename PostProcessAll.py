@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 10
+version = 11
 
 # Initial default values of settings
 defaultSettings = {
@@ -22,6 +22,7 @@ defaultSettings = {
     "numericName" : False,
     "endCodes" : "M5 M9 M30",
     "onlySelected" : False,
+    "skipFirstToolchange" : False,
     # Groups are expanded or not
     "groupPersonal" : True,
     "groupPost" : False,
@@ -534,6 +535,20 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "<p><b>WARNING!<b> This option should be used with caution. "
                 "Review the G-code to verify it is correct. Comments have been "
                 "added to indicate the changes.")
+
+            # check box to skip first toolchange
+            input = inputGroup.children.addBoolValueInput("skipFirstToolchange",
+                                                          "Skip first toolchange",
+                                                          True,
+                                                          "",
+                                                          docSettings["skipFirstToolchange"])
+            input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
+            input.tooltip = "Skip First Tool Change"
+            input.tooltipDescription = (
+                "Skip the first tool change when post processing operations. "
+                "This is useful when the first tool is already loaded in the "
+                "spindle and you don't want to generate unnecessary tool change "
+                "commands at the beginning of the program.")
            
             inputGroup.isExpanded = docSettings["groupPersonal"]
 
@@ -714,6 +729,7 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                 inputs.itemById("endCodes").isEnabled = input.value
                 inputs.itemById("endLabel").isEnabled = input.value
                 inputs.itemById("fastZ").isEnabled = input.value
+                inputs.itemById("skipFirstToolchange").isEnabled = input.value
 
         except:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
@@ -1154,8 +1170,18 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
                 fNum = match["N"] != None
 
                 if (match["T"] != None):
+                    # Add tool change G-codes if not first operation
                     if not fFirst and len(toolChange) != 0:
                         # have tool change G-codes to add
+                        if fToolChangeNum:
+                            # Add line number to tool change
+                            for code in toolChange:
+                                fileBody.write("N" + str(lineNum) + " " + code)
+                                lineNum += constLineNumInc
+                        else:
+                            fileBody.write(toolChange)
+                    elif fFirst and not docSettings["skipFirstToolchange"] and len(toolChange) != 0:
+                        # First operation and skipFirstToolchange is disabled - add tool change codes
                         if fToolChangeNum:
                             # Add line number to tool change
                             for code in toolChange:
@@ -1301,10 +1327,19 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
                             fFastZ = False # Just skip changes
 
                 # copy line to output
-                if (fNum):
-                    fileBody.write("N" + str(lineNum) + " ")
-                    lineNum += constLineNumInc
-                fileBody.write(line)
+                # Skip T code line if this is first operation and skipFirstToolchange is enabled
+                skipCurrentLine = False
+                if fFirst and docSettings["skipFirstToolchange"]:
+                    # Use regBody to check for T code since regParseLine doesn't have T group
+                    bodyMatch = regBody.match(line)
+                    if bodyMatch and bodyMatch.groupdict()["T"] != None:
+                        skipCurrentLine = True
+                
+                if not skipCurrentLine:
+                    if (fNum):
+                        fileBody.write("N" + str(lineNum) + " ")
+                        lineNum += constLineNumInc
+                    fileBody.write(line)
                 lineFull = fileOp.readline()
                 if len(lineFull) == 0:
                     break
