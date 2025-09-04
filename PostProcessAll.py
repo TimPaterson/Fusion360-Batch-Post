@@ -1163,13 +1163,15 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
                     fileHead.write(line)
                 line = fileOp.readline()
 
-            # Body starts at tool code, T
+            # Body starts at tool code, T - look for tool change line (M6 + T###)
+            toolChangePattern = re.compile(r'(?=.*\bM\s*6\b)(?=.*\bT\s*\d{1,3}\b)', re.IGNORECASE)
             while True:
                 match = regBody.match(line).groupdict()
                 line = match["line"]        # filter off line number if present
                 fNum = match["N"] != None
 
-                if (match["T"] != None):
+                # Check for tool change line using more specific pattern
+                if toolChangePattern.search(line):
                     # Add tool change G-codes if not first operation
                     if not fFirst and len(toolChange) != 0:
                         # have tool change G-codes to add
@@ -1330,9 +1332,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
                 # Skip T code line if this is first operation and skipFirstToolchange is enabled
                 skipCurrentLine = False
                 if fFirst and docSettings["skipFirstToolchange"]:
-                    # Use regBody to check for T code since regParseLine doesn't have T group
-                    bodyMatch = regBody.match(line)
-                    if bodyMatch and bodyMatch.groupdict()["T"] != None:
+                    # Check for tool change line: must contain both M6 and T### (1-3 digits)
+                    if toolChangePattern.search(line):
                         skipCurrentLine = True
                 
                 if not skipCurrentLine:
