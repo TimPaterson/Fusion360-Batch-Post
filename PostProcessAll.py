@@ -250,6 +250,14 @@ def CompressFileName(file):
     return file
 
 
+def AssignOutputFolder(parameters, folder):
+    parameters.itemByName("nc_program_output_folder").value.value = folder
+    result = parameters.itemByName("nc_program_output_folder").value.value
+    if result != folder and folder[0:2] == "\\\\":
+        parameters.itemByName("nc_program_output_folder").value.value = "\\\\" + folder    # double up leading "\"
+    return None
+
+
 def GetSetups(cam, settings, setups):
     if len(setups) == 0 or not settings["onlySelected"]:
         setups = []
@@ -322,7 +330,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 ncInput.displayName = constNcProgramName
                 program = programs.add(ncInput)
                 program.postConfiguration = program.postConfiguration
-                program.parameters.itemByName("nc_program_output_folder").value.value = ExpandFileName(docSettings["output"])
+                AssignOutputFolder(program.parameters, ExpandFileName(docSettings["output"]))
                 program.parameters.itemByName("nc_program_createInBrowser").value.value = True
             elif programs.count == 1:
                 program = programs.item(0)
@@ -780,7 +788,11 @@ def PerformPostProcess(docSettings, setups):
         setups = GetSetups(cam, docSettings, setups)
 
         # normalize output folder for this user
-        outputFolder = parameters.itemByName("nc_program_output_folder").value.value
+        # "\" is converted to "/"
+        outputFolder = parameters.itemByName("nc_program_output_folder").value.value.replace("\\", "/")
+        # keep leading "\\" for file share
+        if outputFolder[0:2] == "//":
+            outputFolder = "\\\\" + outputFolder[2:]
         try:
             pathlib.Path(outputFolder).mkdir(exist_ok=True)
         except Exception as exc:
@@ -899,7 +911,7 @@ def PerformPostProcess(docSettings, setups):
 
             progress.hide()
             # restore program output folder
-            parameters.itemByName("nc_program_output_folder").value.value = outputFolder
+            AssignOutputFolder(parameters, outputFolder)
 
         # done with setups, report results
         if cntSkipped != 0:
@@ -959,7 +971,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
             opFolder = opFolder.replace("\\", "/")
 
         parameters.itemByName("nc_program_openInEditor").value.value = False
-        parameters.itemByName("nc_program_output_folder").value.value = opFolder
+        AssignOutputFolder(parameters, opFolder)
         parameters.itemByName("nc_program_filename").value.value = opName
         parameters.itemByName("nc_program_name").value.value = fname
 
