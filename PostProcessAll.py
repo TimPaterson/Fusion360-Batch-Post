@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 10
+version = 11
 
 # Initial default values of settings
 defaultSettings = {
@@ -975,6 +975,12 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
         parameters.itemByName("nc_program_filename").value.value = opName
         parameters.itemByName("nc_program_name").value.value = fname
 
+        m1413TotalSecs = 0 # aggregate cycle time for wazer post processor
+        # set is_wazer to True if our post processor is wazer.cps
+        is_wazer = False
+        if(re.search(r'wazer.cps', parameters.itemByName("nc_program_post").value.value, re.IGNORECASE)):
+            is_wazer = True
+
         # Do it all at once?
         if not docSettings["splitSetup"]:
             fileHead.close()
@@ -1206,6 +1212,14 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
                 if endMark != None:
                     endMark = int(endMark)
                     if endMark in endMcodeSet:
+                        # aggregate M1413 HH:MM:SS 
+                        if (is_wazer and endMark == 1413):
+                            # capture time after code
+                            m1413Reg = re.compile(r"(M(?P<M>[0-9]+) (?P<MCODE>[0-9:]+))?", re.IGNORECASE | re.DOTALL)
+                            m1413Match = m1413Reg.match(line).groupdict()
+                            m1413 = m1413Match["MCODE"]
+                            hh, mm, ss = m1413.split(':')
+                            m1413TotalSecs += int(hh) * 3600 + int(mm) * 60 + int(ss)
                         break
                     # When M49/M48 is used to turn off speed changes, disable fast moves as well
                     if endMark == 49:
@@ -1316,7 +1330,11 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
                 if (fNum):
                     fileBody.write("N" + str(lineNum) + " ")
                     lineNum += constLineNumInc
-                fileBody.write(line)
+                # remove fake tool select for wazer post processor
+                if(is_wazer and re.search(r'T[0-9]+', line, re.IGNORECASE)):
+                    fileBody.write(';DELETED FAKE TOOL SELECT - ' + line)
+                else:
+                    fileBody.write(line)
                 lineFull = fileOp.readline()
                 if len(lineFull) == 0:
                     break
@@ -1342,7 +1360,15 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
                     fileBody.write("N" + str(lineNum) + " " + match["line"])
                     lineNum += constLineNumInc
                 else:
-                    fileBody.write(code)
+                    # check if we're using wazer post processor and we're a m1413 code
+                    if is_wazer:
+                        m1413Match = re.search(r'M1413', code, re.IGNORECASE)
+                        if m1413Match:
+                            from datetime import timedelta
+                            td = timedelta(seconds=m1413TotalSecs)
+                            fileBody.write("M1413 " + str(td) + "\n")
+                    else:
+                        fileBody.write(code)
 
         # Copy body to head
         fileBody.close()
