@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 10
+version = 11
 
 # Initial default values of settings
 defaultSettings = {
@@ -17,6 +17,7 @@ defaultSettings = {
     "delFiles" : False,
     "delFolder" : False,
     "splitSetup" : False,
+    "combineTool" : False,
     "fastZ" : False,
     "toolChange" : "M9 G30",
     "numericName" : False,
@@ -469,6 +470,21 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "limitation. You will get an error if there is a tool change "
                 "in a setup and this options is not selected.")
 
+            # check box to combine operation that use the same tool
+            input = inputGroup.children.addBoolValueInput("combineTool",
+                                                          "Combine operations using same tool",
+                                                          True,
+                                                          "",
+                                                          docSettings["combineTool"])
+            input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
+            input.tooltip = "Combine Consecutive Operations That Use the Same Tool"
+            input.tooltipDescription = (
+                "If consecutive operations use the same tool, have Fusion generate "
+                "their output together. This can optimize G-code for some routers. "
+                "However, it will cause the logic that restores rapid moves to also "
+                "treat it as one operation, which can have negative effects if the "
+                "feed heights for the operations are different.")
+
             # text box as a label for tool change command
             input = inputGroup.children.addTextBoxCommandInput("toolLabel", 
                                                                "", 
@@ -717,6 +733,7 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
 
             # Options for splitSetup
             if input.id == "splitSetup":
+                inputs.itemById("combineTool").isEnabled = input.value
                 inputs.itemById("toolChange").isEnabled = input.value
                 inputs.itemById("toolLabel").isEnabled = input.value
                 inputs.itemById("endCodes").isEnabled = input.value
@@ -1047,7 +1064,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
             # Look ahead for operations without a toolpath. This can happen
             # with a manual operation. Group it with current operation.
             # Or if first, group it with subsequent ones.
-            # Also group together operations with the same tool number
+            # Also optionally group together operations with the same tool number
             opHasTool = None
             curTool = -1
             hasTool = op.hasToolpath
@@ -1058,7 +1075,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
             while i < ops.count:
                 op = ops[i]
                 if not op.isSuppressed:
-                    if op.hasToolpath and op.tool.parameters.itemByName("tool_number").value.value != curTool:
+                    if op.hasToolpath and (not docSettings["combineTool"] or op.tool.parameters.itemByName("tool_number").value.value != curTool):
                         if not hasTool:
                             opList.append(op)
                             opHasTool = op
