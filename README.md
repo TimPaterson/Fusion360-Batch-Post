@@ -134,11 +134,11 @@ To see the new command, go to the `Manufacture` workspace and select the
 the native Post Process command. It also appears in the Actions
 drop-down menu.
 
-**New to Git?** A great Git GUI is [SmartGit](https://www.syntevo.com/smartgit/),
-which hobbyists can use for free. You just select `Clone...` from its
-`Repository` menu, and paste in the address of this web page. That will
+**New to Git?** A nice Git GUI is [GitHub Desktop](https://desktop.github.com/download/). 
+You just click `Clone repository...` on the `File` menu, select the `URL` tab, 
+and paste in the address of this web page. That will
 bring in a copy of `Post Process All` that's ready to use. To update, click
-`Pull` and then `Pull` again.
+`Pull` on the `Repository` menu.
 
 ### Issues
 If `Post Process All` fails, run it again. There seem to be occasional timing 
