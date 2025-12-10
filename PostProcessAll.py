@@ -42,6 +42,7 @@ constPostProcessControlId = "IronPostProcess"
 constCAMProductId = "CAMProductType"
 constAttrGroup = constCmdDefId
 constAttrName = "settings"
+constAttrCompressedName = "CompressedName"
 constSettingsFileExt = ".settings"
 constPostLoopDelay = 0.1
 constBodyTmpFile = "gcodeBody"
@@ -331,7 +332,9 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 ncInput.displayName = constNcProgramName
                 program = programs.add(ncInput)
                 program.postConfiguration = program.postConfiguration
-                AssignOutputFolder(program.parameters, ExpandFileName(docSettings["output"]))
+                outputFolder = docSettings["output"]
+                program.attributes.add(constAttrGroup, constAttrCompressedName, outputFolder)
+                AssignOutputFolder(program.parameters, ExpandFileName(outputFolder))
                 program.parameters.itemByName("nc_program_createInBrowser").value.value = True
             elif programs.count == 1:
                 program = programs.item(0)
@@ -367,7 +370,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                                                    adsk.core.DropDownStyles.TextListDropDownStyle)
             for listItem in programs:
                 input.listItems.add(listItem.name, listItem.name == program.name)
-            input.isFullWidth = True
+            #input.isFullWidth = True
             input.tooltip = "NC Program to Use"
             input.tooltipDescription = (
                 "Post processing will use the settings from the selected NC Program."
@@ -814,12 +817,14 @@ def PerformPostProcess(docSettings, setups):
             pathlib.Path(outputFolder).mkdir(exist_ok=True)
         except Exception as exc:
             # see if we can map it to folder with compressed user
-            compressedName = docSettings["output"]
+            compressedName = program.attributes.itemByName(constAttrGroup, constAttrCompressedName).value
             if compressedName[0] == "~" and compressedName[1:] == outputFolder[-(len(compressedName) - 1):]:
                 # yes, it matches
                 outputFolder = ExpandFileName(compressedName)
 
-        docSettings["output"] = CompressFileName(outputFolder)
+        compressedName = CompressFileName(outputFolder)
+        program.attributes.add(constAttrGroup, constAttrCompressedName, compressedName)
+        docSettings["output"] = compressedName
 
         # Save settings in document attributes
         settingsMgr.SaveSettings(doc.attributes, docSettings)
